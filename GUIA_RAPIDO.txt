@@ -1,0 +1,170 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║         GUIA PRÁTICO - SISTEMA DE DESPACHO DE PROCESSOS                   ║
+║                    Para Não-Técnicos                                       ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+─────────────────────────────────────────────────────────────────────────────
+PASSO 1: INSTALAR NODE.JS (Fazer uma única vez)
+─────────────────────────────────────────────────────────────────────────────
+
+1. Acesse: https://nodejs.org
+2. Clique no botão GRANDE e VERDE "LTS" (não na outra versão)
+3. Salve o arquivo no seu computador
+4. Abra o arquivo baixado e clique "Próximo" em tudo até "Concluir"
+5. Reinicie seu computador (recomendado)
+
+✓ PRONTO! Node.js instalado.
+
+─────────────────────────────────────────────────────────────────────────────
+PASSO 2: DESCOMPACTAR OS ARQUIVOS DO APP
+─────────────────────────────────────────────────────────────────────────────
+
+1. Você tem um arquivo chamado "sistema-despacho.zip"
+2. Clique com botão direito nele
+3. Escolha "Extrair tudo" (Windows) ou "Descompactar" (Mac)
+4. Escolha uma pasta para salvar (ex: C:\Users\SeuNome\Desktop)
+
+✓ PRONTO! Arquivos descompactados.
+
+─────────────────────────────────────────────────────────────────────────────
+PASSO 3: ABRIR O PROMPT DE COMANDO E INSTALAR DEPENDÊNCIAS
+─────────────────────────────────────────────────────────────────────────────
+
+WINDOWS:
+1. Pressione as teclas: Win + R (ao mesmo tempo)
+2. Digite: cmd
+3. Pressione ENTER
+
+MAC/LINUX:
+1. Abra o Terminal (procure por "Terminal" no seu computador)
+
+PARA TODOS:
+4. Você verá um console preto com um cursor piscando
+5. Digite o comando abaixo e pressione ENTER:
+
+   cd C:\Users\SeuNome\Desktop\sistema-despacho
+
+   (Substitua "SeuNome" e "Desktop" pelo seu caminho. Se não souber,
+    procure onde descompactou os arquivos e copie o caminho)
+
+6. Agora digite este comando e pressione ENTER:
+
+   npm install
+
+7. Aguarde. Vai aparecer muitas linhas de texto. Isto é normal!
+   Aguarde até aparecer o símbolo "$" ou ">" novamente.
+   Pode levar 3-5 minutos na primeira vez.
+
+✓ PRONTO! Dependências instaladas.
+
+─────────────────────────────────────────────────────────────────────────────
+PASSO 4: INICIAR O APLICATIVO
+─────────────────────────────────────────────────────────────────────────────
+
+1. No mesmo Prompt/Terminal, digite:
+
+   npm start
+
+2. Pressione ENTER
+
+3. Aguarde. Seu navegador abrirá automaticamente (Firefox, Chrome, etc)
+
+4. Você verá uma tela de login.
+
+✓ PRONTO! Aplicativo rodando!
+
+─────────────────────────────────────────────────────────────────────────────
+PASSO 5: ACESSAR O APP
+─────────────────────────────────────────────────────────────────────────────
+
+Senha padrão: senha123
+
+Digite esta senha e clique em "Acessar"
+
+✓ PRONTO! Você está dentro do app!
+
+─────────────────────────────────────────────────────────────────────────────
+COMO USAR O APP
+─────────────────────────────────────────────────────────────────────────────
+
+ABAS:
+• "Despacho com o Gabinete" = processos que o Secretário decide
+• "Despacho ASSTEC" = processos que VOCÊ decide
+
+PROCESSOS:
+• Clicar em um processo = ver detalhes completos
+• "Autorizo" = aprova o processo
+• "Dê seguimento" = marca como processado
+• "Não autorizo" = rejeita o processo
+• "Diligência" = solicita mais documentos
+
+DOCUMENTOS:
+• Clique em "Anexar arquivo" para adicionar um documento de suporte
+• Os arquivos ficam salvos no seu computador
+
+─────────────────────────────────────────────────────────────────────────────
+DADOS SÃO SALVOS?
+─────────────────────────────────────────────────────────────────────────────
+
+SIM! Os dados estão salvos no seu computador, localmente no navegador.
+
+ATENÇÃO: Se você deletar o histórico/cache do navegador, os dados sumirem.
+Por isso, faça backup periodicamente (salve em um arquivo).
+
+─────────────────────────────────────────────────────────────────────────────
+COMO PARAR O APP
+─────────────────────────────────────────────────────────────────────────────
+
+1. No Prompt/Terminal onde o app está rodando, pressione: Ctrl + C
+
+2. Responda "S" quando perguntado
+
+✓ Aplicativo parado.
+
+Para reiniciar, execute novamente: npm start
+
+─────────────────────────────────────────────────────────────────────────────
+COMO MUDAR A SENHA
+─────────────────────────────────────────────────────────────────────────────
+
+ATENÇÃO: Recomenda-se fazer isso o quanto antes!
+
+1. Abra a pasta sistema-despacho
+2. Vá para: src > App.js
+3. Abra o arquivo com um editor (Bloco de Notas, VS Code, etc)
+4. Procure por: senha123
+5. Substitua "senha123" pela sua nova senha (mantenha as aspas)
+
+Exemplo:
+ANTES: if (loginPass === 'senha123')
+DEPOIS: if (loginPass === 'suaSenhaNovaAqui')
+
+6. Salve o arquivo
+7. Pare o app (Ctrl + C) e reinicie (npm start)
+
+─────────────────────────────────────────────────────────────────────────────
+PROBLEMAS COMUNS
+─────────────────────────────────────────────────────────────────────────────
+
+PROBLEMA: "npm command not found"
+SOLUÇÃO: Node.js não foi instalado. Reinstale: https://nodejs.org
+
+PROBLEMA: Porta 3000 já está em uso
+SOLUÇÃO: Digite no terminal:
+npm start -- --port 3001
+
+PROBLEMA: Esqueci a senha
+SOLUÇÃO: Altere conforme as instruções acima
+
+PROBLEMA: Os dados sumiram
+SOLUÇÃO: Você limpou o cache do navegador. Use backup se tiver.
+
+─────────────────────────────────────────────────────────────────────────────
+PRONTO?
+─────────────────────────────────────────────────────────────────────────────
+
+Qualquer dúvida, releia este guia ou consulte um técnico.
+
+Seu aplicativo está 100% funcionando e pronto para uso!
+
+═════════════════════════════════════════════════════════════════════════════
