@@ -306,13 +306,17 @@ export default function SistemaDespacho() {
     setSelectedAccompaniment((prev) => ({ ...prev, ...updated }));
   };
 
+  const notifEnabled = (type) => pushNotifConfig[type]?.[currentUser] !== false;
+
   const updateVerification = async (id) => {
     await updateDoc(doc(db, 'acompanhamentos', id), { verificacaoAtualizada: true });
     const newSelected = { ...selectedAccompaniment, verificacaoAtualizada: true };
     setSelectedAccompaniment(newSelected);
 
-    addAccompanimentNotification(newSelected, 'verified');
-    addBanner(`✅ Verificação do processo ${newSelected.numeroProcesso} atualizada`, 'success');
+    if (notifEnabled('acompanhamentos')) {
+      addAccompanimentNotification(newSelected, 'verified');
+      addBanner(`✅ Verificação do processo ${newSelected.numeroProcesso} atualizada`, 'success');
+    }
     sendPushForType('acompanhamentos', {
       title: '✅ Verificação Atualizada',
       body: `Processo ${newSelected.numeroProcesso} verificado`,
@@ -383,6 +387,9 @@ export default function SistemaDespacho() {
 
       if (emailsParaEnvio.length > 0) sendDoeNotification(doe, emailsParaEnvio);
 
+      if (notifEnabled('doe')) {
+        addBanner(`📰 DOE/PI publicado — Diário #${newDoe.numeroDiario || 'S/N'}`, 'info');
+      }
       sendPushForType('doe', {
         title: '📰 Nova Publicação DOE/PI',
         body: `Diário #${newDoe.numeroDiario || 'S/N'} — ${new Date(newDoe.dataPublicacao).toLocaleDateString('pt-BR')}\n${newDoe.conteudo.replace(/\*([^*]+)\*/g, '$1').substring(0, 120)}`,
@@ -495,9 +502,9 @@ export default function SistemaDespacho() {
 
         if (!deveEnviar5 && !deveEnviar1) continue;
 
-        // Notificações in-app para master, estagiaria, servidora
+        // Notificações in-app — respeitam o config do master
         const diasMsg = deveEnviar5 ? '5 dias' : 'AMANHÃ';
-        if (['master', 'estagiaria', 'servidora'].includes(currentUser)) {
+        if (pushNotifConfig.audiencias?.[currentUser]) {
           addHearingNotification(hearing, deveEnviar5 ? 'upcoming_5days' : 'upcoming_1day');
           addBanner(`📅 Audiência ${hearing.seiNumber} em ${diasMsg}!`, 'warning');
         }
@@ -1097,10 +1104,10 @@ export default function SistemaDespacho() {
 
               {currentUser === 'master' && (
                 <div className="settings-section">
-                  <h4>🔔 Notificações de APP Celular</h4>
+                  <h4>🔔 Notificações por Usuário</h4>
                   <p style={{fontSize:'12px', color:'var(--neutral-600)', marginBottom:'1rem', lineHeight:'1.5'}}>
-                    Selecione quais usuários recebem notificação push no celular para cada tipo de atualização.
-                    O usuário precisa ter feito login no app pelo celular ao menos uma vez para aparecer como disponível.
+                    Controla <strong>push no celular</strong>, <strong>central de notificações</strong> (sino 🔔) e <strong>banners</strong> de cada usuário.
+                    Para push funcionar, o usuário precisa ter feito login pelo celular ao menos uma vez.
                   </p>
                   {[
                     { key: 'audiencias',      label: '📅 Audiências', desc: '5 e 1 dia antes' },
