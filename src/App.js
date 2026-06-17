@@ -329,10 +329,35 @@ export default function SistemaDespacho() {
   };
 
   const updateAccompaniment = async (id, updatedData) => {
-    // Salva silenciosamente no Firebase — notificações só disparam em "Verificação Atualizada"
     const updated = { ...updatedData, dataUltimaEdicao: new Date().toISOString().split('T')[0], verificacaoAtualizada: false };
     await updateDoc(doc(db, 'acompanhamentos', id), updated);
-    setSelectedAccompaniment((prev) => ({ ...prev, ...updated }));
+    const newSelected = { ...selectedAccompaniment, ...updated };
+    setSelectedAccompaniment(newSelected);
+
+    // Envia notificações com detalhes da mudança
+    const fieldLabels = {
+      objeto: 'Descrição',
+      setorAnterior: 'Setor Anterior',
+      dataSetorAnterior: 'Data Setor Anterior',
+      setorAtual: 'Setor Atual',
+      dataSetorAtual: 'Data Setor Atual',
+      status: 'Status'
+    };
+
+    const changedFields = Object.entries(updatedData)
+      .map(([key, value]) => `${fieldLabels[key] || key}: ${value || '(vazio)'}`)
+      .join(' • ');
+
+    if (notifEnabled('acompanhamentos')) {
+      addAccompanimentNotification(newSelected, 'updated');
+      addBanner(`📍 ${newSelected.numeroProcesso} atualizado`, 'info');
+    }
+    sendPushForType('acompanhamentos', {
+      title: '📍 Nova movimentação',
+      body: `Processo ${newSelected.numeroProcesso}\n${changedFields.substring(0, 100)}`,
+      tab: 'acompanhamentos',
+      tag: `acc-${id}`,
+    });
   };
 
   const notifEnabled = (type) => pushNotifConfig[type]?.[currentUser] !== false;
