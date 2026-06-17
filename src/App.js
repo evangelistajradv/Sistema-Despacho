@@ -64,6 +64,9 @@ export default function SistemaDespacho() {
   const [observationText, setObservationText] = useState('');
   const [hearingViewMode, setHearingViewMode] = useState('list');
   const [pushEnabled, setPushEnabled] = useState(false); // eslint-disable-line no-unused-vars
+  const [pushStatusMsg, setPushStatusMsg] = useState('');
+  // Estado local de edição dos campos do acompanhamento (evita salvar no Firebase a cada tecla)
+  const [accompEdits, setAccompEdits] = useState({});
 
   // Configuração de quais usuários recebem push por tipo (gerenciado pelo master)
   const DEFAULT_PUSH_CONFIG = {
@@ -83,12 +86,21 @@ export default function SistemaDespacho() {
   };
 
   const registerPushSubscription = async (userRole) => {
-    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      setPushStatusMsg('❌ Navegador não suporta notificações push');
+      return;
+    }
     const vapidKey = process.env.REACT_APP_VAPID_PUBLIC_KEY;
-    if (!vapidKey) return;
+    if (!vapidKey) {
+      setPushStatusMsg('❌ Chave VAPID não configurada no servidor');
+      return;
+    }
     try {
       const permission = await Notification.requestPermission();
-      if (permission !== 'granted') return;
+      if (permission !== 'granted') {
+        setPushStatusMsg('❌ Permissão de notificação negada');
+        return;
+      }
       const registration = await navigator.serviceWorker.ready;
       const subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
@@ -102,8 +114,10 @@ export default function SistemaDespacho() {
       subs.push(subData);
       await setDoc(docRef, { subscriptions: subs });
       setPushEnabled(true);
+      setPushStatusMsg('✅ Este dispositivo está registrado para notificações');
       console.log('✅ Push subscription registrada para:', userRole);
     } catch (e) {
+      setPushStatusMsg(`❌ Falhou: ${e.message}`);
       console.warn('⚠️ Push subscription falhou:', e.message);
     }
   };
@@ -286,20 +300,10 @@ export default function SistemaDespacho() {
   };
 
   const updateAccompaniment = async (id, updatedData) => {
+    // Salva silenciosamente no Firebase — notificações só disparam em "Verificação Atualizada"
     const updated = { ...updatedData, dataUltimaEdicao: new Date().toISOString().split('T')[0], verificacaoAtualizada: false };
     await updateDoc(doc(db, 'acompanhamentos', id), updated);
-    const newSelected = { ...selectedAccompaniment, ...updated };
-    setSelectedAccompaniment(newSelected);
-
-    // Notificação in-app
-    addAccompanimentNotification(newSelected, 'updated');
-    addBanner(`📍 Acompanhamento ${newSelected.numeroProcesso} foi atualizado`, 'info');
-    sendPushForType('acompanhamentos', {
-      title: '📍 Acompanhamento Atualizado',
-      body: `Processo ${newSelected.numeroProcesso}: ${(newSelected.status || '').substring(0, 80)}`,
-      tab: 'acompanhamentos',
-      tag: `acc-${id}`,
-    });
+    setSelectedAccompaniment((prev) => ({ ...prev, ...updated }));
   };
 
   const updateVerification = async (id) => {
@@ -797,19 +801,42 @@ export default function SistemaDespacho() {
                   </div>
                 ) : selectedAccompaniment ? (
                   <div className="detail-card">
-                    <button className="back-button" onClick={() => setSelectedAccompaniment(null)}>← Voltar</button>
+                    <button className="back-button" onClick={() => { setSelectedAccompaniment(null); setAccompEdits({}); }}>← Voltar</button>
                     <div className="card-header"><h2>{selectedAccompaniment.numeroProcesso}</h2></div>
                     <div className="form-section">
-                      <div className="form-group"><label>Objeto</label><textarea value={selectedAccompaniment.objeto} onChange={(e) => updateAccompaniment(selectedAccompaniment.id, { objeto: e.target.value })} /></div>
+                      {/* onChange atualiza só o estado local; onBlur salva no Firebase */}
+                      <div className="form-group"><label>Objeto</label><textarea
+                        value={accompEdits.objeto ?? selectedAccompaniment.objeto}
+                        onChange={(e) => setAccompEdits((p) => ({ ...p, objeto: e.target.value }))}
+                        onBlur={() => accompEdits.objeto !== undefined && updateAccompaniment(selectedAccompaniment.id, { objeto: accompEdits.objeto })}
+                      /></div>
                       <div className="form-grid">
-                        <div className="form-group"><label>Setor Anterior</label><input type="text" value={selectedAccompaniment.setorAnterior} onChange={(e) => updateAccompaniment(selectedAccompaniment.id, { setorAnterior: e.target.value })} /></div>
-                        <div className="form-group"><label>Data</label><input type="date" value={selectedAccompaniment.dataSetorAnterior} onChange={(e) => updateAccompaniment(selectedAccompaniment.id, { dataSetorAnterior: e.target.value })} /></div>
+                        <div className="form-group"><label>Setor Anterior</label><input type="text"
+                          value={accompEdits.setorAnterior ?? selectedAccompaniment.setorAnterior}
+                          onChange={(e) => setAccompEdits((p) => ({ ...p, setorAnterior: e.target.value }))}
+                          onBlur={() => accompEdits.setorAnterior !== undefined && updateAccompaniment(selectedAccompaniment.id, { setorAnterior: accompEdits.setorAnterior })}
+                        /></div>
+                        <div className="form-group"><label>Data</label><input type="date"
+                          value={accompEdits.dataSetorAnterior ?? selectedAccompaniment.dataSetorAnterior}
+                          onChange={(e) => updateAccompaniment(selectedAccompaniment.id, { dataSetorAnterior: e.target.value })}
+                        /></div>
                       </div>
                       <div className="form-grid">
-                        <div className="form-group"><label>Setor Atual</label><input type="text" value={selectedAccompaniment.setorAtual} onChange={(e) => updateAccompaniment(selectedAccompaniment.id, { setorAtual: e.target.value })} /></div>
-                        <div className="form-group"><label>Data</label><input type="date" value={selectedAccompaniment.dataSetorAtual} onChange={(e) => updateAccompaniment(selectedAccompaniment.id, { dataSetorAtual: e.target.value })} /></div>
+                        <div className="form-group"><label>Setor Atual</label><input type="text"
+                          value={accompEdits.setorAtual ?? selectedAccompaniment.setorAtual}
+                          onChange={(e) => setAccompEdits((p) => ({ ...p, setorAtual: e.target.value }))}
+                          onBlur={() => accompEdits.setorAtual !== undefined && updateAccompaniment(selectedAccompaniment.id, { setorAtual: accompEdits.setorAtual })}
+                        /></div>
+                        <div className="form-group"><label>Data</label><input type="date"
+                          value={accompEdits.dataSetorAtual ?? selectedAccompaniment.dataSetorAtual}
+                          onChange={(e) => updateAccompaniment(selectedAccompaniment.id, { dataSetorAtual: e.target.value })}
+                        /></div>
                       </div>
-                      <div className="form-group"><label>Status</label><textarea value={selectedAccompaniment.status} onChange={(e) => updateAccompaniment(selectedAccompaniment.id, { status: e.target.value })} /></div>
+                      <div className="form-group"><label>Status</label><textarea
+                        value={accompEdits.status ?? selectedAccompaniment.status}
+                        onChange={(e) => setAccompEdits((p) => ({ ...p, status: e.target.value }))}
+                        onBlur={() => accompEdits.status !== undefined && updateAccompaniment(selectedAccompaniment.id, { status: accompEdits.status })}
+                      /></div>
                     </div>
                     <div className="footer-info">
                       <p>Última edição: <strong>{selectedAccompaniment.dataUltimaEdicao}</strong></p>
@@ -846,7 +873,7 @@ export default function SistemaDespacho() {
                     )}
                     {accompaniments.length === 0 ? (<p className="empty-state">Nenhum acompanhamento</p>) : (
                       accompaniments.map(acc => (
-                        <div key={acc.id} onClick={() => setSelectedAccompaniment(acc)} className="card-item">
+                        <div key={acc.id} onClick={() => { setSelectedAccompaniment(acc); setAccompEdits({}); }} className="card-item">
                           <div className="card-top"><strong>{acc.numeroProcesso}</strong></div>
                           <p className="card-text"><strong>Objeto:</strong> {acc.objeto}</p>
                           <p className="card-text"><strong>Setor Anterior:</strong> {acc.setorAnterior} ({acc.dataSetorAnterior})</p>
@@ -1047,6 +1074,20 @@ export default function SistemaDespacho() {
                 {passwordMessage && <p className="success-message">{passwordMessage}</p>}
                 <button className="btn-primary" onClick={handleChangePassword}>Alterar Senha</button>
               </div>
+              <div className="settings-section">
+                <h4>📱 Status de Notificações deste Dispositivo</h4>
+                {pushStatusMsg ? (
+                  <p style={{fontSize:'13px', padding:'10px 14px', borderRadius:'8px', background: pushStatusMsg.startsWith('✅') ? 'rgba(5,150,105,0.1)' : 'rgba(220,38,38,0.1)', color: pushStatusMsg.startsWith('✅') ? 'var(--accent-green)' : 'var(--accent-red)', fontWeight:'600'}}>
+                    {pushStatusMsg}
+                  </p>
+                ) : (
+                  <p style={{fontSize:'13px', color:'var(--neutral-400)'}}>Verificando...</p>
+                )}
+                <button className="btn-secondary" style={{marginTop:'10px', width:'auto'}} onClick={() => registerPushSubscription(currentUser)}>
+                  🔄 Registrar este dispositivo
+                </button>
+              </div>
+
               <div className="settings-section">
                 <h4>👤 Informações da Conta</h4>
                 <div className="info-line"><span>Usuário:</span><strong>{currentUser}</strong></div>

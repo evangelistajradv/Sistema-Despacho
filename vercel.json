@@ -1,6 +1,11 @@
 {
   "buildCommand": "react-scripts build",
   "outputDirectory": "build",
+  "build": {
+    "env": {
+      "REACT_APP_VAPID_PUBLIC_KEY": "BKyDhTAMY-TX8tE055ZPjCTI0yXWbatZznD_jsrB3MetFiL-6Hxr5k55IhIyrFZvc8nuQNp3EZe5-tlBu0rJphU"
+    }
+  },
   "env": {
     "REACT_APP_VAPID_PUBLIC_KEY": "BKyDhTAMY-TX8tE055ZPjCTI0yXWbatZznD_jsrB3MetFiL-6Hxr5k55IhIyrFZvc8nuQNp3EZe5-tlBu0rJphU",
     "VAPID_SUBJECT": "mailto:evangelistajradv@gmail.com"
