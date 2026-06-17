@@ -10,7 +10,7 @@ import HearingCalendar from './HearingCalendar';
 import { addAccompanimentNotification, addHearingNotification, addBanner } from './notification-service';
 
 const USUARIOS = {
-  master: { nome: 'Master', role: 'master', permissions: ['ver', 'criar', 'editar', 'deletar', 'decidir', 'comentar'] },
+  master: { nome: 'João Evangelista', role: 'master', permissions: ['ver', 'criar', 'editar', 'deletar', 'decidir', 'comentar'] },
   secretario: { nome: 'Feliphe Araújo', role: 'secretario', permissions: ['ver', 'decidir', 'comentar', 'acompanhar', 'despachar'] },
   chefe_gab: { nome: 'Marwin', role: 'chefe_gab', permissions: ['ver', 'decidir', 'comentar', 'acompanhar', 'despachar'] },
   servidora: { nome: 'Isamayla', role: 'servidora', permissions: ['ver', 'editar', 'criar', 'comentar'] },
@@ -150,15 +150,16 @@ export default function SistemaDespacho() {
     return emailString.split(/[,;]/).map(e => e.trim()).filter(e => e && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
   };
 
-  // Carrega login salvo do localStorage se ainda válido (1 ano = 365 dias)
+  // Carrega login e senha salvos do localStorage se ainda válido (1 ano = 365 dias)
   useEffect(() => {
     const saved = localStorage.getItem('asstec_login');
     if (saved) {
       try {
-        const { user, timestamp } = JSON.parse(saved);
+        const { user, pass, timestamp } = JSON.parse(saved);
         const ageDays = (Date.now() - timestamp) / (1000 * 60 * 60 * 24);
         if (ageDays < 365) {
           setLoginUser(user);
+          if (pass) setLoginPass(atob(pass)); // decodifica base64
           setRememberMe(true);
         } else {
           localStorage.removeItem('asstec_login');
@@ -250,15 +251,16 @@ export default function SistemaDespacho() {
     if (user && userPasswords[loginUser] === loginPass) {
       setAuthenticated(true);
       setCurrentUser(loginUser);
-      setLoginPass('');
       if (rememberMe) {
         localStorage.setItem('asstec_login', JSON.stringify({
           user: loginUser,
+          pass: btoa(loginPass), // codifica senha em base64
           timestamp: Date.now()
         }));
       } else {
         localStorage.removeItem('asstec_login');
       }
+      setLoginPass('');
       setTimeout(() => registerPushSubscription(loginUser), 1500);
     } else {
       alert('Usuário ou senha inválida');
@@ -466,14 +468,18 @@ export default function SistemaDespacho() {
 
   const formatDoeContent = (content) => {
     if (!content) return '';
-    // Agrupa as linhas: linha vazia vira separador de parágrafo
-    const paragraphs = content.split(/\n{2,}/);
+    // Substitui quebras duplas/triplas por marcador
+    let text = content.replace(/\n{2,}/g, '|||PARAGRAPH|||');
+    // Limpa quebras simples restantes
+    text = text.replace(/\n/g, ' ');
+    // Divide por parágrafo
+    const paragraphs = text.split('|||PARAGRAPH|||').filter(p => p.trim());
     return paragraphs
       .map(para => {
-        const lines = para.split('\n').map(line =>
-          line.replace(/\*([^*]+)\*/g, '<strong>$1</strong>')
-        );
-        return `<p style="margin:0 0 0.8em 0">${lines.join('<br>')}</p>`;
+        const formatted = para
+          .trim()
+          .replace(/\*([^*]+)\*/g, '<strong style="font-weight:700">$1</strong>');
+        return `<div style="margin-bottom:1rem; line-height:1.7; font-size:14px">${formatted}</div>`;
       })
       .join('');
   };
@@ -608,7 +614,7 @@ export default function SistemaDespacho() {
           <div className="form-group" style={{display:'flex', alignItems:'center', gap:'8px', marginBottom:'1.2rem'}}>
             <input id="remember" type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} style={{width:'16px', height:'16px', cursor:'pointer'}} />
             <label htmlFor="remember" style={{margin:0, fontSize:'13px', fontWeight:'500', color:'var(--neutral-600)', cursor:'pointer'}}>
-              Lembrar-me neste dispositivo
+              Lembrar login e senha (1 ano)
             </label>
           </div>
           <button type="submit" className="login-button">Entrar no Sistema</button>
