@@ -11,10 +11,10 @@ import { addAccompanimentNotification, addHearingNotification, addBanner } from 
 
 const USUARIOS = {
   master: { nome: 'Master', role: 'master', permissions: ['ver', 'criar', 'editar', 'deletar', 'decidir', 'comentar'] },
-  secretario: { nome: 'Secretário', role: 'secretario', permissions: ['ver', 'decidir', 'comentar', 'acompanhar', 'despachar'] },
-  chefe_gab: { nome: 'Chefe de Gabinete', role: 'chefe_gab', permissions: ['ver', 'decidir', 'comentar', 'acompanhar', 'despachar'] },
-  servidora: { nome: 'Servidora ASSTEC', role: 'servidora', permissions: ['ver', 'editar', 'criar', 'comentar'] },
-  estagiaria: { nome: 'Estagiária', role: 'estagiaria', permissions: ['ver', 'editar', 'criar', 'comentar'] }
+  secretario: { nome: 'Feliphe Araújo', role: 'secretario', permissions: ['ver', 'decidir', 'comentar', 'acompanhar', 'despachar'] },
+  chefe_gab: { nome: 'Marwin', role: 'chefe_gab', permissions: ['ver', 'decidir', 'comentar', 'acompanhar', 'despachar'] },
+  servidora: { nome: 'Isamayla', role: 'servidora', permissions: ['ver', 'editar', 'criar', 'comentar'] },
+  estagiaria: { nome: 'Maria Clara', role: 'estagiaria', permissions: ['ver', 'editar', 'criar', 'comentar'] }
 };
 
 export default function SistemaDespacho() {
@@ -22,6 +22,7 @@ export default function SistemaDespacho() {
   const [currentUser, setCurrentUser] = useState(null);
   const [loginUser, setLoginUser] = useState('master');
   const [loginPass, setLoginPass] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light');
   const [activeTab, setActiveTab] = useState('despacho-gab');
   const [processes, setProcesses] = useState([]);
@@ -149,6 +150,25 @@ export default function SistemaDespacho() {
     return emailString.split(/[,;]/).map(e => e.trim()).filter(e => e && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
   };
 
+  // Carrega login salvo do localStorage se ainda válido (1 ano = 365 dias)
+  useEffect(() => {
+    const saved = localStorage.getItem('asstec_login');
+    if (saved) {
+      try {
+        const { user, timestamp } = JSON.parse(saved);
+        const ageDays = (Date.now() - timestamp) / (1000 * 60 * 60 * 24);
+        if (ageDays < 365) {
+          setLoginUser(user);
+          setRememberMe(true);
+        } else {
+          localStorage.removeItem('asstec_login');
+        }
+      } catch (e) {
+        console.warn('Erro ao carregar login salvo:', e);
+      }
+    }
+  }, []);
+
   // Tema - apenas local (preferência de cada dispositivo)
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -231,7 +251,14 @@ export default function SistemaDespacho() {
       setAuthenticated(true);
       setCurrentUser(loginUser);
       setLoginPass('');
-      // Registra push notification após login bem-sucedido
+      if (rememberMe) {
+        localStorage.setItem('asstec_login', JSON.stringify({
+          user: loginUser,
+          timestamp: Date.now()
+        }));
+      } else {
+        localStorage.removeItem('asstec_login');
+      }
       setTimeout(() => registerPushSubscription(loginUser), 1500);
     } else {
       alert('Usuário ou senha inválida');
@@ -318,8 +345,8 @@ export default function SistemaDespacho() {
       addBanner(`✅ Verificação do processo ${newSelected.numeroProcesso} atualizada`, 'success');
     }
     sendPushForType('acompanhamentos', {
-      title: '✅ Verificação Atualizada',
-      body: `Processo ${newSelected.numeroProcesso} verificado`,
+      title: '📍 Nova movimentação',
+      body: `Processo ${newSelected.numeroProcesso}\n${(newSelected.objeto || '').substring(0, 70)}`,
       tab: 'acompanhamentos',
       tag: `acc-verify-${id}`,
     });
@@ -391,8 +418,8 @@ export default function SistemaDespacho() {
         addBanner(`📰 DOE/PI publicado — Diário #${newDoe.numeroDiario || 'S/N'}`, 'info');
       }
       sendPushForType('doe', {
-        title: '📰 Nova Publicação DOE/PI',
-        body: `Diário #${newDoe.numeroDiario || 'S/N'} — ${new Date(newDoe.dataPublicacao).toLocaleDateString('pt-BR')}\n${newDoe.conteudo.replace(/\*([^*]+)\*/g, '$1').substring(0, 120)}`,
+        title: '📰 Nova Publicação no DOE',
+        body: `Diário #${newDoe.numeroDiario || 'S/N'} — ${new Date(newDoe.dataPublicacao).toLocaleDateString('pt-BR')}\n${newDoe.conteudo.replace(/\*([^*]+)\*/g, '$1').substring(0, 100)}...`,
         tab: 'doe',
         tag: `doe-${newDoe.dataPublicacao}`,
       });
@@ -568,15 +595,21 @@ export default function SistemaDespacho() {
             <label htmlFor="usuario">Usuário</label>
             <select id="usuario" value={loginUser} onChange={(e) => setLoginUser(e.target.value)} className="login-input">
               <option value="master">Master</option>
-              <option value="secretario">Secretário</option>
-              <option value="chefe_gab">Chefe de Gabinete</option>
-              <option value="servidora">Servidora ASSTEC</option>
-              <option value="estagiaria">Estagiária</option>
+              <option value="secretario">{USUARIOS.secretario.nome}</option>
+              <option value="chefe_gab">{USUARIOS.chefe_gab.nome}</option>
+              <option value="servidora">{USUARIOS.servidora.nome}</option>
+              <option value="estagiaria">{USUARIOS.estagiaria.nome}</option>
             </select>
           </div>
           <div className="form-group">
             <label htmlFor="senha">Senha</label>
             <input id="senha" type="password" value={loginPass} onChange={(e) => setLoginPass(e.target.value)} placeholder="Digite sua senha" className="login-input" />
+          </div>
+          <div className="form-group" style={{display:'flex', alignItems:'center', gap:'8px', marginBottom:'1.2rem'}}>
+            <input id="remember" type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} style={{width:'16px', height:'16px', cursor:'pointer'}} />
+            <label htmlFor="remember" style={{margin:0, fontSize:'13px', fontWeight:'500', color:'var(--neutral-600)', cursor:'pointer'}}>
+              Lembrar-me neste dispositivo
+            </label>
           </div>
           <button type="submit" className="login-button">Entrar no Sistema</button>
           <p className="login-footer">Credenciais: Use a senha <strong>123456</strong></p>
