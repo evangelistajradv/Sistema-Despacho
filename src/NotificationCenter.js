@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   getAllAccompanimentNotifications,
   getAllHearingNotifications,
+  getAllDeadlineNotifications,
   markNotificationAsRead,
   clearReadNotifications
 } from './notification-service';
@@ -19,15 +20,16 @@ export default function NotificationCenter({ type = 'accompaniments', currentUse
   }, []);
 
   const updateNotifications = () => {
+    let allNotifs = [];
     if (type === 'accompaniments') {
-      const allNotifs = getAllAccompanimentNotifications();
-      setNotifications(allNotifs);
-      setUnreadCount(allNotifs.filter(n => !n.read).length);
+      allNotifs = getAllAccompanimentNotifications();
     } else if (type === 'hearings') {
-      const allNotifs = getAllHearingNotifications();
-      setNotifications(allNotifs);
-      setUnreadCount(allNotifs.filter(n => !n.read).length);
+      allNotifs = getAllHearingNotifications();
+    } else if (type === 'deadlines') {
+      allNotifs = getAllDeadlineNotifications();
     }
+    setNotifications(allNotifs);
+    setUnreadCount(allNotifs.filter(n => !n.read).length);
   };
 
   const handleNotificationClick = (notification) => {
@@ -43,6 +45,8 @@ export default function NotificationCenter({ type = 'accompaniments', currentUse
   const getNotificationTitle = (notification) => {
     if (type === 'accompaniments') {
       return `Processo nº ${notification.accompaniment.numeroProcesso}`;
+    } else if (type === 'deadlines') {
+      return `⚖️ Prazo: ${notification.deadline.numeroPJE || notification.deadline.numeroSEI}`;
     } else {
       return `Audiência - ${notification.hearing.seiNumber}`;
     }
@@ -54,6 +58,12 @@ export default function NotificationCenter({ type = 'accompaniments', currentUse
         main: notification.accompaniment.objeto,
         secondary: `Setor: ${notification.accompaniment.setorAtual}`,
         icon: notification.type === 'updated' ? '📍' : '✅'
+      };
+    } else if (type === 'deadlines') {
+      return {
+        main: notification.deadline.objeto || 'Prazo judicial',
+        secondary: `Vence em ${notification.daysLeft} dia(s) — ${new Date(notification.deadline.prazoFatal).toLocaleDateString('pt-BR')}`,
+        icon: '⚖️'
       };
     } else {
       const daysUntil = Math.ceil(
@@ -85,7 +95,7 @@ export default function NotificationCenter({ type = 'accompaniments', currentUse
           <div className="notification-modal" onClick={e => e.stopPropagation()}>
             <div className="notification-header">
               <h3>
-                {type === 'accompaniments' ? '📍 Acompanhamentos' : '📅 Audiências'}
+                {type === 'accompaniments' ? '📍 Acompanhamentos' : type === 'deadlines' ? '⚖️ Prazos Judiciais' : '📅 Audiências'}
               </h3>
               <button className="close-btn" onClick={() => setIsOpen(false)}>✕</button>
             </div>

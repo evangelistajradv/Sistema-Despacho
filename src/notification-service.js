@@ -5,6 +5,7 @@
 let notificationStore = {
   accompaniments: [],
   hearings: [],
+  deadlines: [],
   banners: []
 };
 
@@ -22,6 +23,36 @@ export const addAccompanimentNotification = (accompaniment, type = 'updated') =>
 
   notificationStore.accompaniments.unshift(notification);
   return notification;
+};
+
+/**
+ * Adicionar notificação de prazo judicial
+ */
+export const addDeadlineNotification = (deadline, daysLeft) => {
+  const notification = {
+    id: `deadline-${deadline.id}-${daysLeft}d-${Date.now()}`,
+    type: 'deadline',
+    daysLeft,
+    deadline,
+    timestamp: new Date(),
+    read: false
+  };
+  notificationStore.deadlines.unshift(notification);
+  return notification;
+};
+
+/**
+ * Obter notificações de prazo não lidas
+ */
+export const getUnreadDeadlineNotifications = () => {
+  return notificationStore.deadlines.filter(n => !n.read);
+};
+
+/**
+ * Obter todas as notificações de prazo
+ */
+export const getAllDeadlineNotifications = () => {
+  return notificationStore.deadlines;
 };
 
 /**
@@ -73,15 +104,11 @@ export const getAllHearingNotifications = () => {
  */
 export const markNotificationAsRead = (id) => {
   const accNotif = notificationStore.accompaniments.find(n => n.id === id);
-  if (accNotif) {
-    accNotif.read = true;
-    return;
-  }
-
+  if (accNotif) { accNotif.read = true; return; }
   const hearNotif = notificationStore.hearings.find(n => n.id === id);
-  if (hearNotif) {
-    hearNotif.read = true;
-  }
+  if (hearNotif) { hearNotif.read = true; return; }
+  const dlNotif = notificationStore.deadlines.find(n => n.id === id);
+  if (dlNotif) { dlNotif.read = true; }
 };
 
 /**
@@ -93,6 +120,9 @@ export const clearReadNotifications = (type = 'all') => {
   }
   if (type === 'all' || type === 'hearings') {
     notificationStore.hearings = notificationStore.hearings.filter(n => !n.read);
+  }
+  if (type === 'all' || type === 'deadlines') {
+    notificationStore.deadlines = notificationStore.deadlines.filter(n => !n.read);
   }
 };
 

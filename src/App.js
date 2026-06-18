@@ -7,7 +7,7 @@ import { collection, doc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, getD
 import NotificationCenter from './NotificationCenter';
 import NotificationBanner from './NotificationBanner';
 import HearingCalendar from './HearingCalendar';
-import { addAccompanimentNotification, addHearingNotification, addBanner } from './notification-service';
+import { addAccompanimentNotification, addHearingNotification, addDeadlineNotification, addBanner } from './notification-service';
 
 const USUARIOS = {
   master: { nome: 'João Evangelista', role: 'master', permissions: ['ver', 'criar', 'editar', 'deletar', 'decidir', 'comentar'] },
@@ -69,11 +69,21 @@ export default function SistemaDespacho() {
   // Estado local de edição dos campos do acompanhamento (evita salvar no Firebase a cada tecla)
   const [accompEdits, setAccompEdits] = useState({});
 
+  // Prazos Judiciais
+  const [deadlines, setDeadlines] = useState([]);
+  const [selectedDeadline, setSelectedDeadline] = useState(null);
+  const [newDeadlineMode, setNewDeadlineMode] = useState(false);
+  const [newDeadline, setNewDeadline] = useState({ numeroPJE: '', numeroSEI: '', prazoFatal: '', tipoPrazo: 'longo', objeto: '' });
+
+  // Edição inline de audiências
+  const [hearingEdits, setHearingEdits] = useState({});
+
   // Configuração de quais usuários recebem push por tipo (gerenciado pelo master)
   const DEFAULT_PUSH_CONFIG = {
     audiencias:      { master: false, secretario: false, chefe_gab: false, servidora: true,  estagiaria: true  },
     acompanhamentos: { master: false, secretario: true,  chefe_gab: true,  servidora: false, estagiaria: false },
     doe:             { master: false, secretario: true,  chefe_gab: true,  servidora: false, estagiaria: false },
+    prazos:          { master: true,  secretario: true,  chefe_gab: true,  servidora: true,  estagiaria: true  },
   };
   const [pushNotifConfig, setPushNotifConfig] = useState(DEFAULT_PUSH_CONFIG);
 
@@ -208,6 +218,11 @@ export default function SistemaDespacho() {
       (snap) => { setDoePublications(snap.docs.map(d => ({ id: d.id, ...d.data() }))); },
       (err) => { console.error('❌ Erro DOE Firebase:', err.message); }
     );
+    const unsubDeadlines = onSnapshot(
+      collection(db, 'prazos'),
+      (snap) => { setDeadlines(snap.docs.map(d => ({ id: d.id, ...d.data() }))); },
+      (err) => { console.error('❌ Erro prazos Firebase:', err.message); }
+    );
     const unsubConfig = onSnapshot(
       doc(db, 'config', 'dados'),
       (snap) => {
@@ -225,7 +240,7 @@ export default function SistemaDespacho() {
       (err) => { console.error('❌ Erro config Firebase:', err.message); }
     );
 
-    return () => { unsubProcesses(); unsubAcc(); unsubHearings(); unsubDoe(); unsubConfig(); };
+    return () => { unsubProcesses(); unsubAcc(); unsubHearings(); unsubDoe(); unsubDeadlines(); unsubConfig(); };
   }, []);
 
   const saveConfig = async (newDoeEmails, newAccompEmails, newPasswords, newPushConfig) => {
@@ -363,8 +378,9 @@ export default function SistemaDespacho() {
   const notifEnabled = (type) => pushNotifConfig[type]?.[currentUser] !== false;
 
   const updateVerification = async (id) => {
-    await updateDoc(doc(db, 'acompanhamentos', id), { verificacaoAtualizada: true });
-    const newSelected = { ...selectedAccompaniment, verificacaoAtualizada: true };
+    const hoje = new Date().toISOString().split('T')[0];
+    await updateDoc(doc(db, 'acompanhamentos', id), { verificacaoAtualizada: true, dataUltimaVerificacao: hoje });
+    const newSelected = { ...selectedAccompaniment, verificacaoAtualizada: true, dataUltimaVerificacao: hoje };
     setSelectedAccompaniment(newSelected);
 
     if (notifEnabled('acompanhamentos')) {
@@ -601,6 +617,70 @@ export default function SistemaDespacho() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hearings]);
 
+  // Verificar prazos judiciais e disparar notificações
+  useEffect(() => {
+    if (deadlines.length === 0) return;
+    const checkDeadlines = async () => {
+      const now = new Date();
+      for (const dl of deadlines) {
+        if (!dl.prazoFatal) continue;
+        const prazoDate = new Date(dl.prazoFatal + 'T23:59:59');
+        const daysLeft = Math.ceil((prazoDate - now) / (1000 * 60 * 60 * 24));
+        if (daysLeft < 0) continue;
+
+        const isShort = dl.tipoPrazo === 'curto';
+        const notifDays = isShort ? [5, 3, 2] : [10, 5, 3];
+        const flagMap = { 10: 'notificado10dias', 5: 'notificado5dias', 3: 'notificado3dias', 2: 'notificado2dias' };
+
+        for (const d of notifDays) {
+          if (daysLeft === d && !dl[flagMap[d]]) {
+            if (notifEnabled('prazos')) {
+              addDeadlineNotification(dl, d);
+              addBanner(`⚖️ Prazo ${dl.numeroPJE || dl.numeroSEI} vence em ${d} dia(s)!`, 'warning');
+            }
+            sendPushForType('prazos', {
+              title: `⚖️ Prazo Judicial — ${d} dia(s)`,
+              body: `Processo ${dl.numeroPJE || dl.numeroSEI}\n${dl.objeto ? dl.objeto.substring(0, 80) : ''}\nVence em: ${new Date(dl.prazoFatal).toLocaleDateString('pt-BR')}`,
+              tab: 'prazos',
+              tag: `prazo-${dl.id}-${d}d`,
+            });
+            try {
+              await updateDoc(doc(db, 'prazos', dl.id), { [flagMap[d]]: true });
+            } catch (e) { console.warn('⚠️ Erro ao marcar flag prazo:', e.message); }
+          }
+        }
+      }
+    };
+    checkDeadlines();
+    const interval = setInterval(checkDeadlines, 3600000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deadlines]);
+
+  const updateHearing = async (id, updatedData) => {
+    await updateDoc(doc(db, 'audiencias', id), updatedData);
+    setSelectedHearing(prev => ({ ...prev, ...updatedData }));
+  };
+
+  const createNewDeadline = async () => {
+    if (!newDeadline.numeroPJE || !newDeadline.prazoFatal) { alert('Preencha os campos obrigatórios'); return; }
+    if (loading) return;
+    setLoading(true);
+    try {
+      await addDoc(collection(db, 'prazos'), {
+        ...newDeadline,
+        criadoEm: new Date().toISOString(),
+        notificado10dias: false, notificado5dias: false,
+        notificado3dias: false, notificado2dias: false
+      });
+      setNewDeadline({ numeroPJE: '', numeroSEI: '', prazoFatal: '', tipoPrazo: 'longo', objeto: '' });
+      setNewDeadlineMode(false);
+    } catch (e) { console.error('❌ Erro:', e.message); alert('Erro ao salvar. Verifique as regras do Firebase.'); }
+    finally { setLoading(false); }
+  };
+
+  const deleteDeadline = async (id) => { await deleteDoc(doc(db, 'prazos', id)); setSelectedDeadline(null); };
+
   const handleChangePassword = async () => {
     setPasswordError(''); setPasswordMessage('');
     if (!currentPassword || !newPassword || !confirmPassword) { setPasswordError('Preencha todos os campos'); return; }
@@ -663,7 +743,8 @@ export default function SistemaDespacho() {
             { id: 'despacho-gab', label: 'Despachos', icon: '📋' },
             { id: 'acompanhamentos', label: 'Acompanhamentos', icon: '📍' },
             { id: 'audiencias', label: 'Audiências', icon: '📅' },
-            { id: 'doe', label: 'DOE/PI', icon: '📰' }
+            { id: 'doe', label: 'DOE/PI', icon: '📰' },
+            { id: 'prazos', label: 'Prazos Judiciais', icon: '⚖️' }
           ].map(tab => (
             <button key={tab.id} className={`nav-item ${activeTab === tab.id ? 'active' : ''}`} onClick={() => setActiveTab(tab.id)}>
               <span className="icon">{tab.icon}</span><span className="label">{tab.label}</span>
@@ -682,6 +763,7 @@ export default function SistemaDespacho() {
             {['master', 'estagiaria', 'servidora'].includes(currentUser) && (
               <NotificationCenter type="hearings" currentUser={currentUser} USUARIOS={USUARIOS} />
             )}
+            <NotificationCenter type="deadlines" currentUser={currentUser} USUARIOS={USUARIOS} />
             <button className="btn-icon" onClick={() => setShowSettings(!showSettings)} title="Configurações">⚙️</button>
             <button className="btn-icon" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title="Alternar tema">{theme === 'light' ? '🌙' : '☀️'}</button>
             <button className="btn-icon btn-logout" onClick={handleLogout} title="Sair">🚪</button>
@@ -910,7 +992,10 @@ export default function SistemaDespacho() {
                       /></div>
                     </div>
                     <div className="footer-info">
-                      <p>Última edição: <strong>{selectedAccompaniment.dataUltimaEdicao}</strong></p>
+                      <p>Última Movimentação: <strong>{selectedAccompaniment.dataUltimaEdicao || '—'}</strong></p>
+                      {selectedAccompaniment.dataUltimaVerificacao && (
+                        <p>Última Verificação: <strong>{selectedAccompaniment.dataUltimaVerificacao}</strong></p>
+                      )}
                       {!selectedAccompaniment.verificacaoAtualizada && (
                         <button className="btn-verify" onClick={() => updateVerification(selectedAccompaniment.id)}>✓ Verificação Atualizada</button>
                       )}
@@ -950,7 +1035,8 @@ export default function SistemaDespacho() {
                           <p className="card-text"><strong>Setor Anterior:</strong> {acc.setorAnterior} ({acc.dataSetorAnterior})</p>
                           <p className="card-text"><strong>Setor Atual:</strong> {acc.setorAtual} ({acc.dataSetorAtual})</p>
                           <p className="card-text"><strong>Status:</strong> {acc.status}</p>
-                          {accompEmails.length > 0 && <p className="card-text"><strong>Emails:</strong> {accompEmails.join(', ')}</p>}
+                          {acc.dataUltimaEdicao && <p className="card-text"><strong>Última Movimentação:</strong> {acc.dataUltimaEdicao}</p>}
+                          {acc.dataUltimaVerificacao && <p className="card-text"><strong>Última Verificação:</strong> {acc.dataUltimaVerificacao}</p>}
                         </div>
                       ))
                     )}
@@ -1009,16 +1095,55 @@ export default function SistemaDespacho() {
                   </div>
                 ) : selectedHearing ? (
                   <div className="detail-card">
-                    <button className="back-button" onClick={() => setSelectedHearing(null)}>← Voltar</button>
+                    <button className="back-button" onClick={() => { setSelectedHearing(null); setHearingEdits({}); }}>← Voltar</button>
                     <div className="card-header"><h2>📅 {selectedHearing.seiNumber}</h2><span className="badge">{new Date(selectedHearing.data).toLocaleDateString('pt-BR')} às {selectedHearing.hora}</span></div>
-                    <div className="info-grid">
-                      <div className="info-item"><label>Objeto</label><p>{selectedHearing.objeto}</p></div>
-                      <div className="info-item"><label>Setor</label><p>{selectedHearing.setorResponsavel}</p></div>
-                      <div className="info-item"><label>Link</label><p>{selectedHearing.linkSessao ? <a href={selectedHearing.linkSessao} target="_blank" rel="noopener noreferrer">Acessar →</a> : '-'}</p></div>
-                    </div>
-                    <div className="info-box"><label>Servidores</label><p>{selectedHearing.servidoresDesignados}</p></div>
+                    {can('editar') ? (
+                      <div className="form-section">
+                        <div className="form-group"><label>Objeto</label><textarea
+                          value={hearingEdits.objeto ?? selectedHearing.objeto}
+                          onChange={(e) => setHearingEdits(p => ({ ...p, objeto: e.target.value }))}
+                          onBlur={() => hearingEdits.objeto !== undefined && updateHearing(selectedHearing.id, { objeto: hearingEdits.objeto })}
+                        /></div>
+                        <div className="form-grid">
+                          <div className="form-group"><label>Data</label><input type="date"
+                            value={hearingEdits.data ?? selectedHearing.data}
+                            onChange={(e) => updateHearing(selectedHearing.id, { data: e.target.value })}
+                          /></div>
+                          <div className="form-group"><label>Hora</label><input type="time"
+                            value={hearingEdits.hora ?? selectedHearing.hora}
+                            onChange={(e) => updateHearing(selectedHearing.id, { hora: e.target.value })}
+                          /></div>
+                        </div>
+                        <div className="form-grid">
+                          <div className="form-group"><label>Setor Responsável</label><input type="text"
+                            value={hearingEdits.setorResponsavel ?? selectedHearing.setorResponsavel}
+                            onChange={(e) => setHearingEdits(p => ({ ...p, setorResponsavel: e.target.value }))}
+                            onBlur={() => hearingEdits.setorResponsavel !== undefined && updateHearing(selectedHearing.id, { setorResponsavel: hearingEdits.setorResponsavel })}
+                          /></div>
+                          <div className="form-group"><label>Link Sessão</label><input type="url"
+                            value={hearingEdits.linkSessao ?? selectedHearing.linkSessao}
+                            onChange={(e) => setHearingEdits(p => ({ ...p, linkSessao: e.target.value }))}
+                            onBlur={() => hearingEdits.linkSessao !== undefined && updateHearing(selectedHearing.id, { linkSessao: hearingEdits.linkSessao })}
+                          /></div>
+                        </div>
+                        <div className="form-group"><label>Servidores Designados</label><textarea
+                          value={hearingEdits.servidoresDesignados ?? selectedHearing.servidoresDesignados}
+                          onChange={(e) => setHearingEdits(p => ({ ...p, servidoresDesignados: e.target.value }))}
+                          onBlur={() => hearingEdits.servidoresDesignados !== undefined && updateHearing(selectedHearing.id, { servidoresDesignados: hearingEdits.servidoresDesignados })}
+                        /></div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="info-grid">
+                          <div className="info-item"><label>Objeto</label><p>{selectedHearing.objeto}</p></div>
+                          <div className="info-item"><label>Setor</label><p>{selectedHearing.setorResponsavel}</p></div>
+                          <div className="info-item"><label>Link</label><p>{selectedHearing.linkSessao ? <a href={selectedHearing.linkSessao} target="_blank" rel="noopener noreferrer">Acessar →</a> : '-'}</p></div>
+                        </div>
+                        <div className="info-box"><label>Servidores</label><p>{selectedHearing.servidoresDesignados}</p></div>
+                      </>
+                    )}
                     {selectedHearing.emailsNotificacao && selectedHearing.emailsNotificacao.length > 0 && (
-                      <div className="info-box"><label>Emails para Notificação</label><p>{selectedHearing.emailsNotificacao.join(', ')}</p></div>
+                      <div className="info-box"><label>Emails para Notificação</label><p>{Array.isArray(selectedHearing.emailsNotificacao) ? selectedHearing.emailsNotificacao.join(', ') : selectedHearing.emailsNotificacao}</p></div>
                     )}
                     {can('deletar') && (<button className="btn-delete" onClick={() => deleteHearing(selectedHearing.id)}>🗑️ Deletar</button>)}
                   </div>
@@ -1034,8 +1159,9 @@ export default function SistemaDespacho() {
                       hearings.sort((a, b) => new Date(a.data) - new Date(b.data)).map(hearing => (
                         <div key={hearing.id} onClick={() => setSelectedHearing(hearing)} className="card-item">
                           <div className="card-top"><strong>{hearing.seiNumber}</strong><span className="badge">{new Date(hearing.data).toLocaleDateString('pt-BR')}</span></div>
-                          <p className="card-text">{hearing.objeto}</p>
-                          <span className="card-date">{hearing.hora}</span>
+                          {hearing.objeto && <p className="card-text"><strong>Objeto:</strong> {hearing.objeto}</p>}
+                          {hearing.hora && <p className="card-text"><strong>Hora:</strong> {hearing.hora}</p>}
+                          {hearing.setorResponsavel && <p className="card-text"><strong>Setor:</strong> {hearing.setorResponsavel}</p>}
                         </div>
                       ))
                     )}
@@ -1117,6 +1243,81 @@ export default function SistemaDespacho() {
                 )}
               </>
             )}
+            {activeTab === 'prazos' && (
+              <>
+                {newDeadlineMode ? (
+                  <div className="form-card">
+                    <h3>Novo Prazo Judicial</h3>
+                    <div className="form-grid">
+                      <div className="form-group"><label>Número PJE *</label><input type="text" placeholder="0001234-56.2024.8.00.0000" value={newDeadline.numeroPJE} onChange={(e) => setNewDeadline({...newDeadline, numeroPJE: e.target.value})} /></div>
+                      <div className="form-group"><label>Número SEI</label><input type="text" placeholder="00130.000001/2024-00" value={newDeadline.numeroSEI} onChange={(e) => setNewDeadline({...newDeadline, numeroSEI: e.target.value})} /></div>
+                    </div>
+                    <div className="form-group"><label>Objeto / Descrição</label><textarea placeholder="Descreva o prazo..." value={newDeadline.objeto} onChange={(e) => setNewDeadline({...newDeadline, objeto: e.target.value})} /></div>
+                    <div className="form-grid">
+                      <div className="form-group"><label>Prazo Fatal *</label><input type="date" value={newDeadline.prazoFatal} onChange={(e) => setNewDeadline({...newDeadline, prazoFatal: e.target.value})} /></div>
+                      <div className="form-group">
+                        <label>Tipo de Prazo</label>
+                        <select value={newDeadline.tipoPrazo} onChange={(e) => setNewDeadline({...newDeadline, tipoPrazo: e.target.value})} style={{width:'100%', padding:'10px 12px', border:'1px solid var(--neutral-300)', borderRadius:'8px', fontSize:'14px', background:'var(--bg-card)', color:'var(--text-primary)'}}>
+                          <option value="longo">Longo (notif. em 10, 5 e 3 dias)</option>
+                          <option value="curto">Curto — 5 a 10 dias (notif. em 5, 3 e 2 dias)</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="form-actions">
+                      <button className="btn-primary" onClick={createNewDeadline} disabled={loading}>{loading ? 'Salvando...' : 'Criar'}</button>
+                      <button className="btn-secondary" disabled={loading} onClick={() => { setNewDeadlineMode(false); setNewDeadline({ numeroPJE: '', numeroSEI: '', prazoFatal: '', tipoPrazo: 'longo', objeto: '' }); }}>Cancelar</button>
+                    </div>
+                  </div>
+                ) : selectedDeadline ? (
+                  <div className="detail-card">
+                    <button className="back-button" onClick={() => setSelectedDeadline(null)}>← Voltar</button>
+                    <div className="card-header">
+                      <h2>⚖️ {selectedDeadline.numeroPJE || selectedDeadline.numeroSEI}</h2>
+                      <span className={`badge ${new Date(selectedDeadline.prazoFatal) < new Date() ? 'status-indeferido' : 'status-pendente'}`}>
+                        {new Date(selectedDeadline.prazoFatal) < new Date() ? 'Vencido' : `Vence em ${Math.ceil((new Date(selectedDeadline.prazoFatal + 'T23:59:59') - new Date()) / (1000 * 60 * 60 * 24))} dia(s)`}
+                      </span>
+                    </div>
+                    <div className="info-grid">
+                      {selectedDeadline.numeroPJE && <div className="info-item"><label>Número PJE</label><p>{selectedDeadline.numeroPJE}</p></div>}
+                      {selectedDeadline.numeroSEI && <div className="info-item"><label>Número SEI</label><p>{selectedDeadline.numeroSEI}</p></div>}
+                      <div className="info-item"><label>Prazo Fatal</label><p>{new Date(selectedDeadline.prazoFatal).toLocaleDateString('pt-BR')}</p></div>
+                      <div className="info-item"><label>Tipo de Prazo</label><p>{selectedDeadline.tipoPrazo === 'curto' ? 'Curto (5–10 dias)' : 'Longo'}</p></div>
+                    </div>
+                    {selectedDeadline.objeto && <div className="info-box"><label>Objeto</label><p>{selectedDeadline.objeto}</p></div>}
+                    {can('deletar') && (<button className="btn-delete" onClick={() => deleteDeadline(selectedDeadline.id)}>🗑️ Deletar</button>)}
+                  </div>
+                ) : (
+                  <div className="list-view">
+                    <div className="list-header">
+                      <h3>Controle de Prazos Judiciais</h3>
+                      {can('criar') && (<button className="btn-new" onClick={() => setNewDeadlineMode(true)}>+ Novo Prazo</button>)}
+                    </div>
+                    {deadlines.length === 0 ? (<p className="empty-state">Nenhum prazo cadastrado</p>) : (
+                      [...deadlines].sort((a, b) => new Date(a.prazoFatal) - new Date(b.prazoFatal)).map(dl => {
+                        const daysLeft = Math.ceil((new Date(dl.prazoFatal + 'T23:59:59') - new Date()) / (1000 * 60 * 60 * 24));
+                        const vencido = daysLeft < 0;
+                        const urgente = !vencido && daysLeft <= 3;
+                        const alerta = !vencido && daysLeft <= 7;
+                        return (
+                          <div key={dl.id} onClick={() => setSelectedDeadline(dl)} className="card-item" style={{ borderLeft: `4px solid ${vencido ? 'var(--accent-red)' : urgente ? '#e85d04' : alerta ? '#f48c06' : 'var(--primary-main)'}` }}>
+                            <div className="card-top">
+                              <strong>{dl.numeroPJE || dl.numeroSEI}</strong>
+                              <span className={`badge ${vencido ? 'status-indeferido' : urgente ? 'status-diligencia' : 'status-pendente'}`}>
+                                {vencido ? 'VENCIDO' : daysLeft === 0 ? 'HOJE!' : `${daysLeft} dia(s)`}
+                              </span>
+                            </div>
+                            {dl.objeto && <p className="card-text"><strong>Objeto:</strong> {dl.objeto.substring(0, 120)}</p>}
+                            {dl.numeroSEI && dl.numeroPJE && <p className="card-text"><strong>SEI:</strong> {dl.numeroSEI}</p>}
+                            <p className="card-text"><strong>Prazo Fatal:</strong> {new Date(dl.prazoFatal).toLocaleDateString('pt-BR')}</p>
+                            <p className="card-text"><strong>Tipo:</strong> {dl.tipoPrazo === 'curto' ? 'Curto' : 'Longo'}</p>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </main>
       </div>
@@ -1177,6 +1378,7 @@ export default function SistemaDespacho() {
                     { key: 'audiencias',      label: '📅 Audiências', desc: '5 e 1 dia antes' },
                     { key: 'acompanhamentos', label: '📍 Acompanhamentos', desc: 'quando atualizado' },
                     { key: 'doe',             label: '📰 DOE/PI', desc: 'nova publicação' },
+                    { key: 'prazos',          label: '⚖️ Prazos Judiciais', desc: '10, 5, 3 e 2 dias antes' },
                   ].map(({ key, label, desc }) => (
                     <div key={key} className="push-config-block">
                       <div className="push-config-title">
@@ -1222,6 +1424,7 @@ export default function SistemaDespacho() {
         {['master', 'estagiaria', 'servidora'].includes(currentUser) && (
           <NotificationCenter type="hearings" currentUser={currentUser} USUARIOS={USUARIOS} />
         )}
+        <NotificationCenter type="deadlines" currentUser={currentUser} USUARIOS={USUARIOS} />
         <button className="btn-icon" onClick={() => setShowSettings(!showSettings)} title="Configurações">⚙️</button>
         <button className="btn-icon" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title="Tema">{theme === 'light' ? '🌙' : '☀️'}</button>
         <button className="btn-icon btn-logout" onClick={handleLogout} title="Sair">🚪</button>
