@@ -757,13 +757,7 @@ export default function SistemaDespacho() {
             <p className="user-role">{USUARIOS[currentUser]?.role}</p>
           </div>
           <div className="sidebar-actions">
-            {['chefe_gab', 'secretario'].includes(currentUser) && (
-              <NotificationCenter type="accompaniments" currentUser={currentUser} USUARIOS={USUARIOS} />
-            )}
-            {['master', 'estagiaria', 'servidora'].includes(currentUser) && (
-              <NotificationCenter type="hearings" currentUser={currentUser} USUARIOS={USUARIOS} />
-            )}
-            <NotificationCenter type="deadlines" currentUser={currentUser} USUARIOS={USUARIOS} />
+            <NotificationCenter currentUser={currentUser} USUARIOS={USUARIOS} />
             <button className="btn-icon" onClick={() => setShowSettings(!showSettings)} title="Configurações">⚙️</button>
             <button className="btn-icon" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title="Alternar tema">{theme === 'light' ? '🌙' : '☀️'}</button>
             <button className="btn-icon btn-logout" onClick={handleLogout} title="Sair">🚪</button>
@@ -1418,13 +1412,7 @@ export default function SistemaDespacho() {
       {/* Barra de ações fixa no rodapé — visível apenas no mobile */}
       <div className="mobile-bottom-bar">
         <span className="mobile-user-label">{USUARIOS[currentUser]?.nome}</span>
-        {['chefe_gab', 'secretario'].includes(currentUser) && (
-          <NotificationCenter type="accompaniments" currentUser={currentUser} USUARIOS={USUARIOS} />
-        )}
-        {['master', 'estagiaria', 'servidora'].includes(currentUser) && (
-          <NotificationCenter type="hearings" currentUser={currentUser} USUARIOS={USUARIOS} />
-        )}
-        <NotificationCenter type="deadlines" currentUser={currentUser} USUARIOS={USUARIOS} />
+        <NotificationCenter currentUser={currentUser} USUARIOS={USUARIOS} />
         <button className="btn-icon" onClick={() => setShowSettings(!showSettings)} title="Configurações">⚙️</button>
         <button className="btn-icon" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title="Tema">{theme === 'light' ? '🌙' : '☀️'}</button>
         <button className="btn-icon btn-logout" onClick={handleLogout} title="Sair">🚪</button>
