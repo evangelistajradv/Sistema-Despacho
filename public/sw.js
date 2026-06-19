@@ -16,8 +16,8 @@ self.addEventListener('push', (event) => {
 
   const options = {
     body: data.body || '',
-    icon: '/pedra-furada.png',
-    badge: '/pedra-furada.png',
+    icon: '/notification-icon.png',
+    badge: '/notification-badge.png',
     data: { tab: data.tab || '', itemId: data.itemId || '', notifId: data.notifId || '' },
     requireInteraction: true,
     vibrate: [200, 100, 200],
