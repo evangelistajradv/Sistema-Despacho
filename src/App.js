@@ -24,6 +24,21 @@ const USUARIOS = {
   estagiaria: { nome: 'Maria Clara', role: 'estagiaria', permissions: ['ver', 'editar', 'criar', 'comentar'] }
 };
 
+// Campo de senha com o "olhinho" para mostrar/ocultar o que foi digitado.
+function PasswordField({ id, value, onChange, placeholder, className }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="password-field-wrap">
+      <input id={id} type={show ? 'text' : 'password'} value={value} onChange={onChange}
+        placeholder={placeholder} className={className} autoComplete="off" />
+      <button type="button" className="password-toggle" tabIndex={-1}
+        title={show ? 'Ocultar senha' : 'Mostrar senha'} onClick={() => setShow((s) => !s)}>
+        <i className={`ti ${show ? 'ti-eye-off' : 'ti-eye'}`}></i>
+      </button>
+    </div>
+  );
+}
+
 // Painel inicial (dashboard) — o que aparece é configurável pelo master
 const DEFAULT_DASHBOARD_CONFIG = {
   showPendentes: true, showPrazos: true, showAudiencias: true, showAcompanhamentos: true,
@@ -1262,7 +1277,7 @@ export default function SistemaDespacho() {
             {!forceReRegister[loginUser] && (
               <div className="form-group">
                 <label htmlFor="reg-senha-atual">Sua senha atual</label>
-                <input id="reg-senha-atual" type="password" value={regCurrentPass} onChange={(e) => setRegCurrentPass(e.target.value)} placeholder="A senha que você já usa" className="login-input" />
+                <PasswordField id="reg-senha-atual" value={regCurrentPass} onChange={(e) => setRegCurrentPass(e.target.value)} placeholder="A senha que você já usa" className="login-input" />
               </div>
             )}
             <div className="form-group">
@@ -1271,11 +1286,11 @@ export default function SistemaDespacho() {
             </div>
             <div className="form-group">
               <label htmlFor="reg-senha-nova">Nova senha</label>
-              <input id="reg-senha-nova" type="password" value={regNewPass} onChange={(e) => setRegNewPass(e.target.value)} placeholder="Mínimo 6 caracteres" className="login-input" />
+              <PasswordField id="reg-senha-nova" value={regNewPass} onChange={(e) => setRegNewPass(e.target.value)} placeholder="Mínimo 6 caracteres" className="login-input" />
             </div>
             <div className="form-group" style={{marginBottom:'1.2rem'}}>
               <label htmlFor="reg-senha-confirma">Confirmar nova senha</label>
-              <input id="reg-senha-confirma" type="password" value={regConfirmPass} onChange={(e) => setRegConfirmPass(e.target.value)} placeholder="Repita a nova senha" className="login-input" />
+              <PasswordField id="reg-senha-confirma" value={regConfirmPass} onChange={(e) => setRegConfirmPass(e.target.value)} placeholder="Repita a nova senha" className="login-input" />
             </div>
             {regError && <p className="login-footer" style={{color:'var(--danger-main, #dc2626)'}}>{regError}</p>}
             <button type="submit" className="login-button">Cadastrar e Entrar</button>
@@ -1309,7 +1324,7 @@ export default function SistemaDespacho() {
           </div>
           <div className="form-group">
             <label htmlFor="senha">Senha</label>
-            <input id="senha" type="password" value={loginPass} onChange={(e) => setLoginPass(e.target.value)} placeholder="Digite sua senha" className="login-input" />
+            <PasswordField id="senha" value={loginPass} onChange={(e) => setLoginPass(e.target.value)} placeholder="Digite sua senha" className="login-input" />
           </div>
           <div className="form-group" style={{display:'flex', alignItems:'center', gap:'8px', marginBottom:'1.2rem'}}>
             <input id="remember" type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} style={{width:'16px', height:'16px', cursor:'pointer'}} />
@@ -2035,9 +2050,9 @@ export default function SistemaDespacho() {
               </div>
               <div className="settings-section">
                 <h4>🔐 Alterar Senha</h4>
-                <div className="form-group"><label>Senha Atual</label><input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} placeholder="Digite sua senha atual" /></div>
-                <div className="form-group"><label>Nova Senha</label><input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Digite a nova senha" /></div>
-                <div className="form-group"><label>Confirmar Nova Senha</label><input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Confirme a nova senha" /></div>
+                <div className="form-group"><label>Senha Atual</label><PasswordField value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} placeholder="Digite sua senha atual" /></div>
+                <div className="form-group"><label>Nova Senha</label><PasswordField value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Digite a nova senha" /></div>
+                <div className="form-group"><label>Confirmar Nova Senha</label><PasswordField value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Confirme a nova senha" /></div>
                 {passwordError && <p className="error-message">{passwordError}</p>}
                 {passwordMessage && <p className="success-message">{passwordMessage}</p>}
                 <button className="btn-primary" onClick={handleChangePassword}>Alterar Senha</button>

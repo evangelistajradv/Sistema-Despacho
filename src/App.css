@@ -2947,3 +2947,37 @@ h1, h2, h3, .logo-text h2 {
     max-width: none;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════ */
+/* Campo de senha com "olhinho" para mostrar/ocultar                */
+/* ═══════════════════════════════════════════════════════════════ */
+.password-field-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.password-field-wrap input {
+  width: 100%;
+  padding-right: 42px !important;
+}
+
+.password-toggle {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--neutral-400);
+  font-size: 18px;
+  padding: 6px;
+  line-height: 1;
+}
+
+.password-toggle:hover {
+  color: var(--primary-main);
+}
