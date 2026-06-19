@@ -285,6 +285,53 @@ h1, h2, h3, .logo-text h2 {
   transform: translateY(0);
 }
 
+.login-divider {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  margin: 1.2rem 0;
+  color: var(--neutral-400);
+  font-size: 12px;
+}
+
+.login-divider::before,
+.login-divider::after {
+  content: '';
+  flex: 1;
+  border-bottom: 1px solid var(--neutral-300, #d1d5db);
+}
+
+.login-divider span {
+  padding: 0 10px;
+}
+
+.google-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  background: #fff;
+  color: #3c4043;
+  border: 1.5px solid var(--neutral-300, #d1d5db);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.google-btn:hover {
+  background: #f8f9fa;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.google-btn i {
+  font-size: 18px;
+  color: #4285F4;
+}
+
 .login-footer {
   text-align: center;
   font-size: 12px;

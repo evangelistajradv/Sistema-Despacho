@@ -9,6 +9,7 @@ import {
   signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, updatePassword,
   EmailAuthProvider, reauthenticateWithCredential, setPersistence,
   browserLocalPersistence, browserSessionPersistence, onAuthStateChanged, sendPasswordResetEmail,
+  GoogleAuthProvider, signInWithPopup,
 } from 'firebase/auth';
 import NotificationCenter from './NotificationCenter';
 import NotificationBanner from './NotificationBanner';
@@ -418,6 +419,30 @@ export default function SistemaDespacho() {
     }
   };
 
+  // Confere se a senha digitada é mesmo a da pessoa que diz ser aquele papel:
+  // tenta a senha antiga (hash salvo no Firestore) ou, se ela já tiver feito a
+  // migração da semana passada, a senha da conta técnica sintética.
+  const verifyLegacyIdentity = async (role, password) => {
+    const stored = userPasswords[role];
+    const typedHash = await hashPassword(password);
+    if (stored && (stored === typedHash || stored === password)) return true;
+    try { await signInWithEmailAndPassword(auth, roleEmail(role), password); return true; }
+    catch (e) { return false; }
+  };
+
+  // Vincula um e-mail (e, se for por e-mail/senha, cria a conta real) ao papel
+  // escolhido, marca como cadastrado e entra. Usado tanto pelo cadastro manual
+  // quanto pelo "Entrar com Google".
+  const finishRegistration = async (role, email) => {
+    const newEmails = { ...userEmails, [role]: email };
+    const newRegistered = { ...emailRegistered, [role]: true };
+    const newForce = { ...forceReRegister, [role]: false };
+    const newLegacyPasswords = { ...userPasswords, [role]: null };
+    setUserEmails(newEmails); setEmailRegistered(newRegistered); setForceReRegister(newForce); setUserPasswords(newLegacyPasswords);
+    await saveConfig({ userEmails: newEmails, emailRegistered: newRegistered, forceReRegister: newForce, userPasswords: newLegacyPasswords });
+    finishLogin(role);
+  };
+
   // Cadastro do e-mail real + nova senha — aparece automaticamente no próximo
   // login de quem ainda não fez isso (emailRegistered[role] ainda não é true).
   // Por segurança, exige a senha atual (antiga ou já migrada) para provar que é
@@ -431,18 +456,9 @@ export default function SistemaDespacho() {
     if (regNewPass.length < 6) { setRegError('A nova senha deve ter no mínimo 6 caracteres'); return; }
     if (regNewPass !== regConfirmPass) { setRegError('As senhas não coincidem'); return; }
 
-    const bypass = !!forceReRegister[role];
-    if (!bypass) {
+    if (!forceReRegister[role]) {
       if (!regCurrentPass) { setRegError('Digite sua senha atual'); return; }
-      const stored = userPasswords[role];
-      const typedHash = await hashPassword(regCurrentPass);
-      const legacyOk = !!stored && (stored === typedHash || stored === regCurrentPass);
-      let synthOk = false;
-      if (!legacyOk) {
-        try { await signInWithEmailAndPassword(auth, roleEmail(role), regCurrentPass); synthOk = true; }
-        catch (e) { /* não é essa senha também */ }
-      }
-      if (!legacyOk && !synthOk) { setRegError('Senha atual incorreta'); return; }
+      if (!(await verifyLegacyIdentity(role, regCurrentPass))) { setRegError('Senha atual incorreta'); return; }
     }
 
     try {
@@ -450,20 +466,57 @@ export default function SistemaDespacho() {
         await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence);
       } catch (e) { /* ignora */ }
       await createUserWithEmailAndPassword(auth, regEmail, regNewPass);
-      const newEmails = { ...userEmails, [role]: regEmail };
-      const newRegistered = { ...emailRegistered, [role]: true };
-      const newForce = { ...forceReRegister, [role]: false };
-      const newLegacyPasswords = { ...userPasswords, [role]: null };
-      setUserEmails(newEmails); setEmailRegistered(newRegistered); setForceReRegister(newForce); setUserPasswords(newLegacyPasswords);
-      await saveConfig({ userEmails: newEmails, emailRegistered: newRegistered, forceReRegister: newForce, userPasswords: newLegacyPasswords });
       setRegEmail(''); setRegCurrentPass(''); setRegNewPass(''); setRegConfirmPass('');
-      finishLogin(role);
+      await finishRegistration(role, regEmail);
     } catch (err) {
       if (err.code === 'auth/email-already-in-use') {
         setRegError('Esse e-mail já está cadastrado em outra conta do sistema.');
       } else {
         setRegError('Erro ao cadastrar: ' + err.message);
       }
+    }
+  };
+
+  // Entrar/cadastrar com a Conta Google. Na tela de cadastro, exige a senha
+  // atual antes de abrir o popup do Google (prova de identidade), a não ser
+  // que o master tenha autorizado o recadastro sem ela. Na tela de login
+  // normal (já cadastrado), só confere se essa conta Google é a vinculada.
+  const handleGoogleAuth = async ({ isRegistration }) => {
+    const role = loginUser;
+    setRegError('');
+    if (isRegistration && !forceReRegister[role]) {
+      if (!regCurrentPass) { setRegError('Digite sua senha atual para confirmar que é você'); return; }
+      if (!(await verifyLegacyIdentity(role, regCurrentPass))) { setRegError('Senha atual incorreta'); return; }
+    }
+    try {
+      try {
+        await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence);
+      } catch (e) { /* ignora */ }
+      const result = await signInWithPopup(auth, new GoogleAuthProvider());
+      const googleEmail = result.user.email;
+
+      if (isRegistration) {
+        const existingRole = Object.keys(userEmails).find((r) => userEmails[r] === googleEmail);
+        if (existingRole && existingRole !== role) {
+          setRegError(`Essa conta Google já está vinculada a ${USUARIOS[existingRole]?.nome}.`);
+          await signOut(auth);
+          return;
+        }
+        setRegCurrentPass('');
+        await finishRegistration(role, googleEmail);
+      } else {
+        const matchedRole = Object.keys(USUARIOS).find((r) => userEmails[r] === googleEmail);
+        if (matchedRole) {
+          finishLogin(matchedRole);
+        } else {
+          alert('Essa conta Google ainda não está vinculada a nenhum usuário. Cadastre-se primeiro digitando sua senha atual.');
+          await signOut(auth);
+        }
+      }
+    } catch (err) {
+      if (err.code === 'auth/popup-closed-by-user') return;
+      const msg = 'Erro ao entrar com Google: ' + err.message;
+      if (isRegistration) setRegError(msg); else alert(msg);
     }
   };
 
@@ -1155,7 +1208,15 @@ export default function SistemaDespacho() {
             </div>
             {regError && <p className="login-footer" style={{color:'var(--danger-main, #dc2626)'}}>{regError}</p>}
             <button type="submit" className="login-button">Cadastrar e Entrar</button>
-            <p className="login-footer">Esse cadastro é feito uma vez só. Da próxima vez, você entra direto com seu e-mail e senha.</p>
+            <div className="login-divider"><span>ou</span></div>
+            <button type="button" className="google-btn" onClick={() => handleGoogleAuth({ isRegistration: true })}>
+              <i className="ti ti-brand-google"></i> Entrar com Google
+            </button>
+            <p className="login-footer">
+              {forceReRegister[loginUser]
+                ? 'Cadastro liberado pelo master — defina seu e-mail (ou use o Google) e uma nova senha.'
+                : 'Confirme sua senha atual e cadastre seu e-mail (digitando uma senha nova, ou pelo Google). Da próxima vez, você entra direto.'}
+            </p>
           </form>
         </div>
       );
@@ -1188,6 +1249,10 @@ export default function SistemaDespacho() {
             </label>
           </div>
           <button type="submit" className="login-button">Entrar no Sistema</button>
+          <div className="login-divider"><span>ou</span></div>
+          <button type="button" className="google-btn" onClick={() => handleGoogleAuth({ isRegistration: false })}>
+            <i className="ti ti-brand-google"></i> Entrar com Google
+          </button>
           <button type="button" className="link-btn" style={{marginTop:'10px', width:'100%', justifyContent:'center'}} onClick={handleForgotPassword}>
             Esqueci minha senha
           </button>
