@@ -2,9 +2,14 @@ import React, { useState, useEffect } from 'react';
 import './App.css';
 import emailjs from '@emailjs/browser';
 import { EMAILJS_CONFIG } from './emailjs-config';
-import { db, storage, authReady } from './firebase-config';
+import { db, storage, authReady, auth, roleEmail, roleFromEmail } from './firebase-config';
 import { collection, doc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, getDoc } from 'firebase/firestore';
 import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
+import {
+  signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, updatePassword,
+  EmailAuthProvider, reauthenticateWithCredential, setPersistence,
+  browserLocalPersistence, browserSessionPersistence, onAuthStateChanged,
+} from 'firebase/auth';
 import NotificationCenter from './NotificationCenter';
 import NotificationBanner from './NotificationBanner';
 import HearingCalendar from './HearingCalendar';
@@ -24,8 +29,8 @@ export default function SistemaDespacho() {
   const [loginUser, setLoginUser] = useState('master');
   const [loginPass, setLoginPass] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
-  const [pendingAuto, setPendingAuto] = useState(null); // login automático aguardando config
-  const [configLoaded, setConfigLoaded] = useState(false);
+  const [, setConfigLoaded] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false); // já conferiu se há sessão real salva pelo Firebase
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light');
   const [activeTab, setActiveTab] = useState('despacho-gab');
   const [processes, setProcesses] = useState([]);
@@ -67,6 +72,8 @@ export default function SistemaDespacho() {
   const [newDocLink, setNewDocLink] = useState({ url: '', nome: '' });
   const [showAddDocModal, setShowAddDocModal] = useState(false);
   const [linkTarget, setLinkTarget] = useState(null); // { collectionName, entity, setEntity }
+  const [newProcessDocs, setNewProcessDocs] = useState([]); // anexos escolhidos antes de criar o despacho
+  const [newDoeDocs, setNewDoeDocs] = useState([]); // anexos escolhidos antes de criar a publicação do DOE
   const [showObservationsModal, setShowObservationsModal] = useState(false);
   const [observationText, setObservationText] = useState('');
   const [hearingViewMode, setHearingViewMode] = useState('list');
@@ -248,30 +255,19 @@ export default function SistemaDespacho() {
       return text;
     }
   };
-  const isHash = (s) => typeof s === 'string' && /^[a-f0-9]{64}$/i.test(s);
-
-  // Carrega o login salvo no localStorage se ainda válido (1 ano = 365 dias).
-  // Novo formato guarda apenas um token (hash da senha) — nunca a senha legível.
+  // Restaura a sessão real do Firebase Authentication (substitui o antigo
+  // "lembrar login" via localStorage — agora o próprio Firebase mantém a
+  // sessão do usuário entre acessos, de forma segura).
   useEffect(() => {
-    const saved = localStorage.getItem('asstec_login');
-    if (!saved) return;
-    try {
-      const data = JSON.parse(saved);
-      const ageDays = (Date.now() - data.timestamp) / (1000 * 60 * 60 * 24);
-      if (ageDays >= 365) { localStorage.removeItem('asstec_login'); return; }
-      if (data.user) setLoginUser(data.user);
-      setRememberMe(true);
-      if (data.token) {
-        // formato novo: login automático após a config carregar
-        setPendingAuto({ user: data.user, token: data.token });
-      } else if (data.pass) {
-        // formato antigo (senha em base64): apenas pré-preenche o campo
-        try { setLoginPass(decodeURIComponent(escape(atob(data.pass)))); }
-        catch { try { setLoginPass(atob(data.pass)); } catch (e) { /* ignora */ } }
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setAuthChecked(true);
+      if (user && !user.isAnonymous) {
+        const role = roleFromEmail(user.email);
+        if (USUARIOS[role]) finishLogin(role);
       }
-    } catch (e) {
-      console.warn('Erro ao carregar login salvo:', e);
-    }
+    });
+    return () => unsub();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Tema - apenas local (preferência de cada dispositivo)
@@ -288,18 +284,45 @@ export default function SistemaDespacho() {
     }
   }, []);
 
-  // Firebase - Sincronização em tempo real entre TODOS os usuários.
-  // Aguarda o login anônimo (authReady) antes de assinar, para funcionar mesmo
-  // quando as regras exigirem autenticação.
+  // config/dados pode ser lido com a sessão anônima, mesmo antes do login real
+  // (é o que permite migrar a senha antiga na primeira vez que cada um entra).
   useEffect(() => {
     let cancelled = false;
-    let unsubs = [];
+    let unsubConfig;
 
     authReady.then(() => {
       if (cancelled) return;
-      console.log('🔥 Conectando ao Firebase...');
+      unsubConfig = onSnapshot(
+        doc(db, 'config', 'dados'),
+        (snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            console.log('✅ Config carregada do Firebase:', data);
+            if (data.doeEmails) setDoeEmails(data.doeEmails);
+            if (data.accompEmails) setAccompEmails(data.accompEmails);
+            if (data.userPasswords) setUserPasswords(data.userPasswords);
+            if (data.pushNotifConfig) setPushNotifConfig(data.pushNotifConfig);
+            if (data.tabVisibility) setTabVisibility(data.tabVisibility);
+            if (data.userPermissions) setUserPermissions(data.userPermissions);
+          } else {
+            console.log('ℹ️ Config ainda não existe no Firebase - será criada ao salvar');
+          }
+          setConfigLoaded(true);
+        },
+        (err) => { console.error('❌ Erro config Firebase:', err.message); setConfigLoaded(true); }
+      );
+    });
 
-      const unsubProcesses = onSnapshot(
+    return () => { cancelled = true; unsubConfig && unsubConfig(); };
+  }, []);
+
+  // Demais coleções exigem o login real (e-mail/senha) — só assina depois que
+  // o usuário entra no sistema.
+  useEffect(() => {
+    if (!authenticated) return;
+    console.log('🔥 Conectando ao Firebase...');
+
+    const unsubProcesses = onSnapshot(
       collection(db, 'processos'),
       (snap) => { setProcesses(snap.docs.map(d => ({ id: d.id, ...d.data() }))); },
       (err) => { console.error('❌ Erro processos Firebase:', err.message); }
@@ -324,31 +347,9 @@ export default function SistemaDespacho() {
       (snap) => { setDeadlines(snap.docs.map(d => ({ id: d.id, ...d.data() }))); },
       (err) => { console.error('❌ Erro prazos Firebase:', err.message); }
     );
-    const unsubConfig = onSnapshot(
-      doc(db, 'config', 'dados'),
-      (snap) => {
-        if (snap.exists()) {
-          const data = snap.data();
-          console.log('✅ Config carregada do Firebase:', data);
-          if (data.doeEmails) setDoeEmails(data.doeEmails);
-          if (data.accompEmails) setAccompEmails(data.accompEmails);
-          if (data.userPasswords) setUserPasswords(data.userPasswords);
-          if (data.pushNotifConfig) setPushNotifConfig(data.pushNotifConfig);
-          if (data.tabVisibility) setTabVisibility(data.tabVisibility);
-          if (data.userPermissions) setUserPermissions(data.userPermissions);
-        } else {
-          console.log('ℹ️ Config ainda não existe no Firebase - será criada ao salvar');
-        }
-        setConfigLoaded(true);
-      },
-      (err) => { console.error('❌ Erro config Firebase:', err.message); setConfigLoaded(true); }
-    );
 
-      unsubs = [unsubProcesses, unsubAcc, unsubHearings, unsubDoe, unsubDeadlines, unsubConfig];
-    });
-
-    return () => { cancelled = true; unsubs.forEach((u) => u && u()); };
-  }, []);
+    return () => { unsubProcesses(); unsubAcc(); unsubHearings(); unsubDoe(); unsubDeadlines(); };
+  }, [authenticated]);
 
   const saveConfig = async (newDoeEmails, newAccompEmails, newPasswords, newPushConfig, newTabVisibility, newUserPermissions) => {
     try {
@@ -373,57 +374,53 @@ export default function SistemaDespacho() {
     setAuthenticated(true);
     setCurrentUser(role);
     setLoginPass('');
-    setPendingAuto(null);
     setTimeout(() => registerPushSubscription(role), 1500);
   };
 
+  // Login com o Firebase Authentication "de verdade" (e-mail técnico + senha).
+  // Quem ainda não migrou (primeiro login após a atualização de segurança) é
+  // migrado automaticamente: a senha digitada é conferida contra o hash antigo
+  // salvo no Firestore e, se bater, uma conta real é criada na hora — sem o
+  // usuário perceber nada diferente.
   const handleLogin = async (e) => {
     e.preventDefault();
-    const user = USUARIOS[loginUser];
-    if (!user) { alert('Usuário inválido'); return; }
-    const stored = userPasswords[loginUser];
-    const typedHash = await hashPassword(loginPass);
-    // aceita hash novo OU senha em texto puro (formato antigo, durante a migração)
-    const ok = stored === typedHash || stored === loginPass;
-    if (!ok) { alert('Usuário ou senha inválida'); return; }
+    const role = loginUser;
+    if (!USUARIOS[role]) { alert('Usuário inválido'); return; }
+    if (!loginPass) { alert('Digite sua senha'); return; }
 
-    // migra automaticamente senhas em texto puro para hash no banco
-    if (stored === loginPass && !isHash(stored)) {
-      const upgraded = { ...userPasswords, [loginUser]: typedHash };
-      setUserPasswords(upgraded);
-      saveConfig(null, null, upgraded);
-    }
+    try {
+      await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence);
+    } catch (e) { /* navegador sem suporte a persistência; segue com o padrão */ }
 
-    if (rememberMe) {
-      // guarda apenas o token (hash) — nunca a senha legível
+    try {
+      await signInWithEmailAndPassword(auth, roleEmail(role), loginPass);
+      finishLogin(role);
+      return;
+    } catch (err) {
+      // Pode ser conta ainda não migrada OU senha incorreta — confere a senha
+      // antiga salva no Firestore antes de decidir.
+      const stored = userPasswords[role];
+      const typedHash = await hashPassword(loginPass);
+      const legacyOk = !!stored && (stored === typedHash || stored === loginPass);
+      if (!legacyOk) { alert('Usuário ou senha inválida'); return; }
       try {
-        localStorage.setItem('asstec_login', JSON.stringify({
-          user: loginUser,
-          token: typedHash,
-          timestamp: Date.now(),
-        }));
-      } catch (err) {
-        console.warn('Não foi possível salvar o login neste dispositivo:', err.message);
+        await createUserWithEmailAndPassword(auth, roleEmail(role), loginPass);
+        // a senha antiga não é mais usada para autenticar; some do banco
+        const cleared = { ...userPasswords, [role]: null };
+        setUserPasswords(cleared);
+        saveConfig(null, null, cleared);
+        finishLogin(role);
+      } catch (createErr) {
+        if (createErr.code === 'auth/email-already-in-use') {
+          // a conta já existe (já migrada antes): então a senha está errada mesmo
+          alert('Usuário ou senha inválida');
+        } else {
+          console.error('❌ Erro ao migrar conta:', createErr.message);
+          alert('Erro ao migrar sua conta: ' + createErr.message);
+        }
       }
-    } else {
-      localStorage.removeItem('asstec_login');
     }
-    finishLogin(loginUser);
   };
-
-  // Login automático quando há credencial lembrada (token) e a config já carregou
-  useEffect(() => {
-    if (!pendingAuto || authenticated || !configLoaded) return;
-    let cancelled = false;
-    (async () => {
-      const stored = userPasswords[pendingAuto.user];
-      if (!stored) return;
-      const ok = stored === pendingAuto.token || (await hashPassword(stored)) === pendingAuto.token;
-      if (ok && !cancelled) finishLogin(pendingAuto.user);
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingAuto, configLoaded, userPasswords, authenticated]);
 
   // Navegação a partir do clique em notificação push (service worker envia mensagem)
   useEffect(() => {
@@ -466,7 +463,10 @@ export default function SistemaDespacho() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authenticated, currentUser, tabVisibility, activeTab]);
 
-  const handleLogout = () => { setAuthenticated(false); setCurrentUser(null); setLoginPass(''); };
+  const handleLogout = () => {
+    signOut(auth).catch((e) => console.warn('Erro ao sair:', e.message));
+    setAuthenticated(false); setCurrentUser(null); setLoginPass('');
+  };
 
   const can = (action) => {
     if (!currentUser) return false;
@@ -485,13 +485,23 @@ export default function SistemaDespacho() {
     if (loading) return;
     setLoading(true);
     try {
-      await addDoc(collection(db, 'processos'), {
+      const docRef = await addDoc(collection(db, 'processos'), {
         type: 'gabinete', numero: newProcess.numero, objeto: newProcess.objeto,
         parteInteressada: newProcess.parteInteressada, analise: newProcess.analise,
         dataEntrada: new Date().toISOString().split('T')[0], status: 'pendente',
         dataDespacho: null, despachado: false, motivo: ''
       });
+      if (newProcessDocs.length > 0) {
+        const docs = [];
+        for (const d of newProcessDocs) {
+          docs.push(d.tipo === 'pdf'
+            ? await uploadPdf(d.file, `processos/${docRef.id}`)
+            : { url: d.url, nome: d.nome, tipo: 'link', adicionadoEm: new Date().toISOString() });
+        }
+        await updateDoc(docRef, { documentos: docs });
+      }
       setNewProcess({ numero: '', objeto: '', parteInteressada: '', analise: '' });
+      setNewProcessDocs([]);
       setNewProcessMode(false);
     } catch (e) { console.error('❌ Erro:', e.message); alert('Erro ao salvar. Verifique as regras do Firebase.'); }
     finally { setLoading(false); }
@@ -606,7 +616,17 @@ export default function SistemaDespacho() {
     
     try {
       const doe = { ...newDoe, criadoEm: new Date().toISOString() };
-      await addDoc(collection(db, 'doe'), doe);
+      const docRef = await addDoc(collection(db, 'doe'), doe);
+
+      if (newDoeDocs.length > 0) {
+        const docs = [];
+        for (const d of newDoeDocs) {
+          docs.push(d.tipo === 'pdf'
+            ? await uploadPdf(d.file, `doe/${docRef.id}`)
+            : { url: d.url, nome: d.nome, tipo: 'link', adicionadoEm: new Date().toISOString() });
+        }
+        await updateDoc(docRef, { documentos: docs });
+      }
 
       // Manter apenas 7 últimos - deletar os mais velhos
       const sorted = [...doePublications].sort((a, b) => new Date(b.dataPublicacao) - new Date(a.dataPublicacao));
@@ -630,6 +650,7 @@ export default function SistemaDespacho() {
       });
 
       setNewDoe({ dataPublicacao: '', dataDisponibilizacao: '', numeroDiario: '', conteudo: '' });
+      setNewDoeDocs([]);
       setNewDoeMode(false);
     } catch (e) {
       console.error('❌ Erro ao criar DOE:', e.message);
@@ -751,25 +772,8 @@ export default function SistemaDespacho() {
     }
   };
 
-  // Anexa um único PDF a uma publicação do DOE
-  const handleUploadDoePdf = async (e) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!validatePdf(file) || !selectedDoe?.id) return;
-    setUploadingDoc(true);
-    try {
-      const meta = await uploadPdf(file, `doe/${selectedDoe.id}`);
-      const upd = { pdfUrl: meta.url, pdfNome: meta.nome, pdfPath: meta.storagePath };
-      await updateDoc(doc(db, 'doe', selectedDoe.id), upd);
-      setSelectedDoe((prev) => ({ ...prev, ...upd }));
-    } catch (err) {
-      console.error('❌ Erro upload PDF DOE:', err);
-      alert('Erro ao enviar o PDF. Verifique as regras do Firebase Storage. ' + err.message);
-    } finally {
-      setUploadingDoc(false);
-    }
-  };
-
+  // Remove o PDF antigo (formato anterior, anexo único) de uma publicação do DOE.
+  // Novos anexos do DOE usam o campo `documentos` (renderAttachments), igual aos despachos.
   const handleRemoveDoePdf = async () => {
     const path = selectedDoe?.pdfPath;
     await updateDoc(doc(db, 'doe', selectedDoe.id), { pdfUrl: null, pdfNome: null, pdfPath: null });
@@ -830,6 +834,50 @@ export default function SistemaDespacho() {
             )}
           </div>
         )}
+      </div>
+    </div>
+  );
+
+  // Bloco de anexos (PDF + link) ANTES de o registro existir — usado nas telas
+  // de criação de despacho e de publicação do DOE. Fica em memória; os PDFs só
+  // são enviados ao Storage quando o registro é efetivamente criado.
+  const renderPendingAttachments = (pendingDocs, setPendingDocs) => (
+    <div className="form-group">
+      <label>📎 Documentos (opcional)</label>
+      <div className="attachments">
+        {pendingDocs.length > 0 ? (
+          pendingDocs.map((d, i) => (
+            <div key={i} className="attachment-item">
+              <span className="attachment-link">
+                <i className={`ti ${d.tipo === 'link' ? 'ti-link' : 'ti-file-type-pdf'}`}></i><span>{d.nome}</span>
+              </span>
+              <button type="button" className="attachment-remove" title="Remover"
+                onClick={() => setPendingDocs(pendingDocs.filter((_, idx) => idx !== i))}>✕</button>
+            </div>
+          ))
+        ) : (
+          <p className="attachment-empty">Nenhum documento adicionado</p>
+        )}
+        <div className="attachment-actions">
+          <label className="upload-btn">
+            <i className="ti ti-upload"></i> Selecionar PDF
+            <input type="file" accept="application/pdf" style={{ display: 'none' }}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = '';
+                if (!validatePdf(file)) return;
+                setPendingDocs([...pendingDocs, { tipo: 'pdf', file, nome: file.name }]);
+              }} />
+          </label>
+          <button type="button" className="link-btn" onClick={() => {
+            const url = window.prompt('Cole o link do documento:');
+            if (!url) return;
+            const nome = window.prompt('Nome do documento (opcional):', url) || url;
+            setPendingDocs([...pendingDocs, { tipo: 'link', url, nome }]);
+          }}>
+            <i className="ti ti-link"></i> Adicionar link
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -957,38 +1005,37 @@ export default function SistemaDespacho() {
 
   const deleteDeadline = async (id) => { await deleteDoc(doc(db, 'prazos', id)); setSelectedDeadline(null); };
 
+  // Troca de senha via Firebase Authentication: precisa reautenticar com a
+  // senha atual antes de poder definir a nova (exigência de segurança do
+  // próprio Firebase — evita que alguém com a sessão aberta troque a senha
+  // sem saber a atual).
   const handleChangePassword = async () => {
     setPasswordError(''); setPasswordMessage('');
     if (!currentPassword || !newPassword || !confirmPassword) { setPasswordError('Preencha todos os campos'); return; }
-    const stored = userPasswords[currentUser];
-    const curHash = await hashPassword(currentPassword);
-    const okCurrent = stored === curHash || stored === currentPassword;
-    if (!okCurrent) { setPasswordError('Senha atual incorreta'); return; }
     if (newPassword.length < 6) { setPasswordError('Nova senha deve ter no mínimo 6 caracteres'); return; }
     if (newPassword !== confirmPassword) { setPasswordError('As senhas não coincidem'); return; }
-    const newHash = await hashPassword(newPassword);
-    const updatedPasswords = { ...userPasswords, [currentUser]: newHash };
-    setUserPasswords(updatedPasswords);
-    await saveConfig(null, null, updatedPasswords);
-    // se este dispositivo lembra o login, atualiza o token para a nova senha
     try {
-      const saved = localStorage.getItem('asstec_login');
-      if (saved) {
-        const d = JSON.parse(saved);
-        if (d.user === currentUser) {
-          delete d.pass;
-          d.token = newHash;
-          d.timestamp = Date.now();
-          localStorage.setItem('asstec_login', JSON.stringify(d));
-        }
+      const cred = EmailAuthProvider.credential(roleEmail(currentUser), currentPassword);
+      await reauthenticateWithCredential(auth.currentUser, cred);
+      await updatePassword(auth.currentUser, newPassword);
+      setPasswordMessage('Senha alterada com sucesso!');
+      setCurrentPassword(''); setNewPassword(''); setConfirmPassword('');
+      setTimeout(() => { setPasswordMessage(''); setShowSettings(false); }, 2000);
+    } catch (err) {
+      if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+        setPasswordError('Senha atual incorreta');
+      } else {
+        setPasswordError('Erro ao alterar senha: ' + err.message);
       }
-    } catch (e) { /* ignora */ }
-    setPasswordMessage('Senha alterada com sucesso!');
-    setCurrentPassword(''); setNewPassword(''); setConfirmPassword('');
-    setTimeout(() => { setPasswordMessage(''); setShowSettings(false); }, 2000);
+    }
   };
 
   if (!authenticated) {
+    if (!authChecked) {
+      // Evita o "flash" da tela de login enquanto o Firebase confere se já
+      // existe uma sessão salva neste dispositivo.
+      return <div className="login-container" style={{ backgroundImage: `url(${process.env.PUBLIC_URL}/passaros-wallpaper.jpg)` }}><div className="login-overlay"></div></div>;
+    }
     return (
       <div className="login-container" style={{ backgroundImage: `url(${process.env.PUBLIC_URL}/passaros-wallpaper.jpg)` }}>
         <div className="login-overlay"></div>
@@ -1016,7 +1063,7 @@ export default function SistemaDespacho() {
             </label>
           </div>
           <button type="submit" className="login-button">Entrar no Sistema</button>
-          <p className="login-footer">Credenciais: Use a senha <strong>123456</strong></p>
+          <p className="login-footer">Use sua senha cadastrada para entrar.</p>
         </form>
       </div>
     );
@@ -1066,9 +1113,10 @@ export default function SistemaDespacho() {
                     </div>
                     <div className="form-group"><label>Objeto *</label><textarea placeholder="Descrição..." value={newProcess.objeto} onChange={(e) => setNewProcess({...newProcess, objeto: e.target.value})} /></div>
                     <div className="form-group"><label>Análise Jurídica</label><textarea placeholder="Parecer..." value={newProcess.analise} onChange={(e) => setNewProcess({...newProcess, analise: e.target.value})} /></div>
+                    {renderPendingAttachments(newProcessDocs, setNewProcessDocs)}
                     <div className="form-actions">
                       <button className="btn-primary" onClick={createNewProcess} disabled={loading}>{loading ? 'Salvando...' : 'Criar'}</button>
-                      <button className="btn-secondary" disabled={loading} onClick={() => {setNewProcessMode(false); setNewProcess({ numero: '', objeto: '', parteInteressada: '', analise: '' });}}>Cancelar</button>
+                      <button className="btn-secondary" disabled={loading} onClick={() => {setNewProcessMode(false); setNewProcess({ numero: '', objeto: '', parteInteressada: '', analise: '' }); setNewProcessDocs([]);}}>Cancelar</button>
                     </div>
                   </div>
                 ) : selectedProcess ? (
@@ -1423,11 +1471,12 @@ export default function SistemaDespacho() {
                       <textarea placeholder="Cole o conteúdo do DOE aqui...&#10;&#10;Use *texto* para deixar em negrito." value={newDoe.conteudo} onChange={(e) => setNewDoe({...newDoe, conteudo: e.target.value})} style={{minHeight: '200px', fontFamily: 'monospace', fontSize: '13px'}} />
                       <p style={{fontSize: '11px', color: 'var(--neutral-400)', marginTop: '4px'}}>💡 Use *texto* para negrito — ex: <em>*SEMARH*</em> vira <strong>SEMARH</strong></p>
                     </div>
+                    {renderPendingAttachments(newDoeDocs, setNewDoeDocs)}
                     <div className="form-actions">
                       <button className="btn-primary" onClick={createNewDoe} disabled={loading}>
                         {loading ? 'Salvando...' : 'Criar'}
                       </button>
-                      <button className="btn-secondary" disabled={loading} onClick={() => {setNewDoeMode(false); setNewDoe({ dataPublicacao: '', dataDisponibilizacao: '', numeroDiario: '', conteudo: '' });}}>Cancelar</button>
+                      <button className="btn-secondary" disabled={loading} onClick={() => {setNewDoeMode(false); setNewDoe({ dataPublicacao: '', dataDisponibilizacao: '', numeroDiario: '', conteudo: '' }); setNewDoeDocs([]);}}>Cancelar</button>
                     </div>
                   </div>
                 ) : selectedDoe ? (
@@ -1443,10 +1492,10 @@ export default function SistemaDespacho() {
                       <label>Conteúdo</label>
                       <div className="doe-content" dangerouslySetInnerHTML={{ __html: formatDoeContent(selectedDoe.conteudo) }} />
                     </div>
-                    <div className="info-box">
-                      <label>📎 DOE em PDF</label>
-                      <div className="attachments">
-                        {selectedDoe.pdfUrl ? (
+                    {selectedDoe.pdfUrl && (
+                      <div className="info-box">
+                        <label>📎 DOE em PDF (anexo antigo)</label>
+                        <div className="attachments">
                           <div className="attachment-item">
                             <a href={selectedDoe.pdfUrl} target="_blank" rel="noopener noreferrer" className="attachment-link">
                               <i className="ti ti-file-type-pdf"></i><span>{selectedDoe.pdfNome || 'DOE.pdf'}</span>
@@ -1455,18 +1504,10 @@ export default function SistemaDespacho() {
                               <button type="button" className="attachment-remove" title="Remover" onClick={handleRemoveDoePdf}>✕</button>
                             )}
                           </div>
-                        ) : (
-                          <p className="attachment-empty">Nenhum PDF anexado</p>
-                        )}
-                        {can('editar') && !selectedDoe.pdfUrl && (
-                          <label className={`upload-btn ${uploadingDoc ? 'disabled' : ''}`}>
-                            <i className="ti ti-upload"></i> {uploadingDoc ? 'Enviando...' : 'Anexar DOE em PDF'}
-                            <input type="file" accept="application/pdf" disabled={uploadingDoc}
-                              onChange={handleUploadDoePdf} style={{ display: 'none' }} />
-                          </label>
-                        )}
+                        </div>
                       </div>
-                    </div>
+                    )}
+                    {renderAttachments('doe', selectedDoe, setSelectedDoe, true)}
                     <button className="btn-delete" onClick={() => deleteDoe(selectedDoe.id)}>🗑️ Deletar</button>
                   </div>
                 ) : (

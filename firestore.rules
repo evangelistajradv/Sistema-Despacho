@@ -1,11 +1,18 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Exige o login (anônimo) do Firebase em todas as coleções do app
-    // (processos, acompanhamentos, audiencias, doe, prazos, config,
-    //  pushSubscriptions, notificacoes...). Fecha o acesso de quem não está no app.
+    // config/dados pode ser lido por uma sessão anônima (antes do login real),
+    // pois é onde fica a senha antiga usada só para migrar a conta de cada
+    // usuário para o Firebase Authentication na primeira vez que ele entra.
+    // Escrever em config/dados já exige login real (e-mail/senha).
+    match /config/dados {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.token.email != null;
+    }
+    // Todo o resto (processos, acompanhamentos, audiencias, doe, prazos,
+    // pushSubscriptions, notificacoes...) exige login real do usuário.
     match /{document=**} {
-      allow read, write: if request.auth != null;
+      allow read, write: if request.auth != null && request.auth.token.email != null;
     }
   }
 }

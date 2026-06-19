@@ -18,11 +18,18 @@ export const db = getFirestore(app);
 export const storage = getStorage(app);
 export const auth = getAuth(app);
 
-// Login anônimo automático (invisível ao usuário). Dá um "passaporte" técnico ao
-// app para que as regras do Firebase possam exigir autenticação — fechando o
-// acesso de quem não está usando o app, sem mexer no login próprio do sistema.
-// É seguro mesmo com as regras ainda abertas: só passa a ser exigido quando você
-// publicar as regras com "request.auth != null".
+// Cada usuário do sistema (master, secretario, chefe_gab, servidora, estagiaria)
+// é uma conta real do Firebase Authentication, identificada por um e-mail técnico
+// interno (não é um e-mail de verdade, é só o "nome de usuário" para o Firebase).
+const ROLE_EMAIL_DOMAIN = 'asstec-semarh.app';
+export const roleEmail = (role) => `${role}@${ROLE_EMAIL_DOMAIN}`;
+export const roleFromEmail = (email) => (email || '').split('@')[0];
+
+// Login anônimo automático (invisível ao usuário), usado apenas ANTES do login
+// real, para poder ler as configurações do app (config/dados) e verificar a
+// senha antiga de quem ainda não migrou para o Firebase Authentication.
+// Depois do login, o usuário passa a ter uma sessão real (e-mail/senha) e as
+// regras do Firebase passam a exigir essa sessão real para tudo o mais.
 let authReadyResolve;
 export const authReady = new Promise((resolve) => { authReadyResolve = resolve; });
 
