@@ -1445,7 +1445,9 @@ export default function SistemaDespacho() {
                               <strong>{acc.numeroProcesso}</strong>
                               <span className="badge status-pendente">{new Date(acc.dataUltimaEdicao).toLocaleDateString('pt-BR')}</span>
                             </div>
+                            {acc.objeto && <p className="card-text"><strong>Objeto:</strong> {acc.objeto.substring(0, 100)}</p>}
                             <p className="card-text"><strong>Setor Atual:</strong> {acc.setorAtual || '—'}</p>
+                            {acc.status && <p className="card-text"><strong>Status:</strong> {acc.status.substring(0, 100)}</p>}
                           </div>
                         ))
                       )}
@@ -2280,13 +2282,13 @@ export default function SistemaDespacho() {
 
                       <div className="push-config-block" style={{marginBottom:'1.2rem'}}>
                         <div className="push-config-title"><strong><i className="ti ti-user-plus" style={{marginRight:'6px'}}></i>Criar novo usuário</strong></div>
-                        <div style={{display:'flex', gap:'8px', flexWrap:'wrap', alignItems:'flex-start'}}>
+                        <div style={{display:'flex', gap:'8px', flexWrap:'wrap', alignItems:'center'}}>
                           <div className="form-group" style={{flex:'1', minWidth:'180px', marginBottom:0}}>
                             <input type="text" value={newUserName} onChange={(e) => setNewUserName(e.target.value)}
                               placeholder="Nome completo da pessoa"
                               onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); createUser(); } }} />
                           </div>
-                          <button type="button" className="btn-primary" style={{width:'auto'}} onClick={createUser}>Criar</button>
+                          <button type="button" className="btn-primary" style={{flex:'0 0 auto', marginTop:0}} onClick={createUser}>Criar</button>
                         </div>
                       </div>
 
