@@ -2,8 +2,9 @@ import React, { useState, useEffect } from 'react';
 import './App.css';
 import emailjs from '@emailjs/browser';
 import { EMAILJS_CONFIG } from './emailjs-config';
-import { db } from './firebase-config';
+import { db, storage } from './firebase-config';
 import { collection, doc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, getDoc } from 'firebase/firestore';
+import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import NotificationCenter from './NotificationCenter';
 import NotificationBanner from './NotificationBanner';
 import HearingCalendar from './HearingCalendar';
@@ -23,6 +24,8 @@ export default function SistemaDespacho() {
   const [loginUser, setLoginUser] = useState('master');
   const [loginPass, setLoginPass] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
+  const [pendingAuto, setPendingAuto] = useState(null); // login automático aguardando config
+  const [configLoaded, setConfigLoaded] = useState(false);
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light');
   const [activeTab, setActiveTab] = useState('despacho-gab');
   const [processes, setProcesses] = useState([]);
@@ -60,8 +63,7 @@ export default function SistemaDespacho() {
   const [newAccompaniment, setNewAccompaniment] = useState({ objeto: '', numeroProcesso: '', setorAnterior: '', dataSetorAnterior: '', setorAtual: '', dataSetorAtual: '', status: '' });
   const [newHearing, setNewHearing] = useState({ seiNumber: '', data: '', hora: '', objeto: '', linkSessao: '', setorResponsavel: '', servidoresDesignados: '', emailsNotificacao: '' });
   const [newDoe, setNewDoe] = useState({ dataPublicacao: '', dataDisponibilizacao: '', numeroDiario: '', conteudo: '' });
-  const [newDocLink, setNewDocLink] = useState({ url: '', nome: '' });
-  const [showAddDocModal, setShowAddDocModal] = useState(false);
+  const [uploadingDoc, setUploadingDoc] = useState(false);
   const [showObservationsModal, setShowObservationsModal] = useState(false);
   const [observationText, setObservationText] = useState('');
   const [hearingViewMode, setHearingViewMode] = useState('list');
@@ -104,6 +106,23 @@ export default function SistemaDespacho() {
 
   // master sempre vê tudo; demais respeitam a configuração (default = visível)
   const tabVisible = (tabId) => currentUser === 'master' || tabVisibility[tabId]?.[currentUser] !== false;
+
+  // Permissões configuráveis pelo master (leitura/criação/edição/exclusão).
+  // O default vem das permissões fixas em USUARIOS.
+  const PERMISSION_ACTIONS = [
+    { key: 'ver',     label: 'Leitura' },
+    { key: 'criar',   label: 'Criação' },
+    { key: 'editar',  label: 'Edição' },
+    { key: 'deletar', label: 'Exclusão' },
+  ];
+  const DEFAULT_USER_PERMISSIONS = Object.keys(USUARIOS).reduce((acc, role) => {
+    acc[role] = PERMISSION_ACTIONS.reduce((p, a) => {
+      p[a.key] = USUARIOS[role].permissions.includes(a.key);
+      return p;
+    }, {});
+    return acc;
+  }, {});
+  const [userPermissions, setUserPermissions] = useState(DEFAULT_USER_PERMISSIONS);
 
   // ─── Helpers para Push Notifications ───────────────────────────────────────
 
@@ -215,23 +234,40 @@ export default function SistemaDespacho() {
     return emailString.split(/[,;]/).map(e => e.trim()).filter(e => e && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
   };
 
-  // Carrega login e senha salvos do localStorage se ainda válido (1 ano = 365 dias)
+  // ─── Segurança: hash de senha (SHA-256) ────────────────────────────────────
+  const hashPassword = async (text) => {
+    try {
+      const enc = new TextEncoder().encode(text);
+      const buf = await crypto.subtle.digest('SHA-256', enc);
+      return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+    } catch (e) {
+      // Sem WebCrypto (contexto não seguro): mantém comportamento legado
+      return text;
+    }
+  };
+  const isHash = (s) => typeof s === 'string' && /^[a-f0-9]{64}$/i.test(s);
+
+  // Carrega o login salvo no localStorage se ainda válido (1 ano = 365 dias).
+  // Novo formato guarda apenas um token (hash da senha) — nunca a senha legível.
   useEffect(() => {
     const saved = localStorage.getItem('asstec_login');
-    if (saved) {
-      try {
-        const { user, pass, timestamp } = JSON.parse(saved);
-        const ageDays = (Date.now() - timestamp) / (1000 * 60 * 60 * 24);
-        if (ageDays < 365) {
-          setLoginUser(user);
-          if (pass) setLoginPass(atob(pass)); // decodifica base64
-          setRememberMe(true);
-        } else {
-          localStorage.removeItem('asstec_login');
-        }
-      } catch (e) {
-        console.warn('Erro ao carregar login salvo:', e);
+    if (!saved) return;
+    try {
+      const data = JSON.parse(saved);
+      const ageDays = (Date.now() - data.timestamp) / (1000 * 60 * 60 * 24);
+      if (ageDays >= 365) { localStorage.removeItem('asstec_login'); return; }
+      if (data.user) setLoginUser(data.user);
+      setRememberMe(true);
+      if (data.token) {
+        // formato novo: login automático após a config carregar
+        setPendingAuto({ user: data.user, token: data.token });
+      } else if (data.pass) {
+        // formato antigo (senha em base64): apenas pré-preenche o campo
+        try { setLoginPass(decodeURIComponent(escape(atob(data.pass)))); }
+        catch { try { setLoginPass(atob(data.pass)); } catch (e) { /* ignora */ } }
       }
+    } catch (e) {
+      console.warn('Erro ao carregar login salvo:', e);
     }
   }, []);
 
@@ -289,17 +325,19 @@ export default function SistemaDespacho() {
           if (data.userPasswords) setUserPasswords(data.userPasswords);
           if (data.pushNotifConfig) setPushNotifConfig(data.pushNotifConfig);
           if (data.tabVisibility) setTabVisibility(data.tabVisibility);
+          if (data.userPermissions) setUserPermissions(data.userPermissions);
         } else {
           console.log('ℹ️ Config ainda não existe no Firebase - será criada ao salvar');
         }
+        setConfigLoaded(true);
       },
-      (err) => { console.error('❌ Erro config Firebase:', err.message); }
+      (err) => { console.error('❌ Erro config Firebase:', err.message); setConfigLoaded(true); }
     );
 
     return () => { unsubProcesses(); unsubAcc(); unsubHearings(); unsubDoe(); unsubDeadlines(); unsubConfig(); };
   }, []);
 
-  const saveConfig = async (newDoeEmails, newAccompEmails, newPasswords, newPushConfig, newTabVisibility) => {
+  const saveConfig = async (newDoeEmails, newAccompEmails, newPasswords, newPushConfig, newTabVisibility, newUserPermissions) => {
     try {
       const payload = {
         doeEmails: newDoeEmails !== null ? newDoeEmails : doeEmails,
@@ -307,6 +345,7 @@ export default function SistemaDespacho() {
         userPasswords: newPasswords !== null ? newPasswords : userPasswords,
         pushNotifConfig: newPushConfig !== undefined ? newPushConfig : pushNotifConfig,
         tabVisibility: newTabVisibility !== undefined ? newTabVisibility : tabVisibility,
+        userPermissions: newUserPermissions !== undefined ? newUserPermissions : userPermissions,
       };
       console.log('💾 Salvando config no Firebase:', payload);
       await setDoc(doc(db, 'config', 'dados'), payload, { merge: true });
@@ -317,27 +356,61 @@ export default function SistemaDespacho() {
     }
   };
 
-  const handleLogin = (e) => {
+  const finishLogin = (role) => {
+    setAuthenticated(true);
+    setCurrentUser(role);
+    setLoginPass('');
+    setPendingAuto(null);
+    setTimeout(() => registerPushSubscription(role), 1500);
+  };
+
+  const handleLogin = async (e) => {
     e.preventDefault();
     const user = USUARIOS[loginUser];
-    if (user && userPasswords[loginUser] === loginPass) {
-      setAuthenticated(true);
-      setCurrentUser(loginUser);
-      if (rememberMe) {
+    if (!user) { alert('Usuário inválido'); return; }
+    const stored = userPasswords[loginUser];
+    const typedHash = await hashPassword(loginPass);
+    // aceita hash novo OU senha em texto puro (formato antigo, durante a migração)
+    const ok = stored === typedHash || stored === loginPass;
+    if (!ok) { alert('Usuário ou senha inválida'); return; }
+
+    // migra automaticamente senhas em texto puro para hash no banco
+    if (stored === loginPass && !isHash(stored)) {
+      const upgraded = { ...userPasswords, [loginUser]: typedHash };
+      setUserPasswords(upgraded);
+      saveConfig(null, null, upgraded);
+    }
+
+    if (rememberMe) {
+      // guarda apenas o token (hash) — nunca a senha legível
+      try {
         localStorage.setItem('asstec_login', JSON.stringify({
           user: loginUser,
-          pass: btoa(loginPass), // codifica senha em base64
-          timestamp: Date.now()
+          token: typedHash,
+          timestamp: Date.now(),
         }));
-      } else {
-        localStorage.removeItem('asstec_login');
+      } catch (err) {
+        console.warn('Não foi possível salvar o login neste dispositivo:', err.message);
       }
-      setLoginPass('');
-      setTimeout(() => registerPushSubscription(loginUser), 1500);
     } else {
-      alert('Usuário ou senha inválida');
+      localStorage.removeItem('asstec_login');
     }
+    finishLogin(loginUser);
   };
+
+  // Login automático quando há credencial lembrada (token) e a config já carregou
+  useEffect(() => {
+    if (!pendingAuto || authenticated || !configLoaded) return;
+    let cancelled = false;
+    (async () => {
+      const stored = userPasswords[pendingAuto.user];
+      if (!stored) return;
+      const ok = stored === pendingAuto.token || (await hashPassword(stored)) === pendingAuto.token;
+      if (ok && !cancelled) finishLogin(pendingAuto.user);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAuto, configLoaded, userPasswords, authenticated]);
 
   // Navegação a partir do clique em notificação push (service worker envia mensagem)
   useEffect(() => {
@@ -384,6 +457,13 @@ export default function SistemaDespacho() {
 
   const can = (action) => {
     if (!currentUser) return false;
+    if (currentUser === 'master') return true; // master tem acesso total
+    // ações configuráveis pelo master (leitura/criação/edição/exclusão)
+    const configurable = ['ver', 'criar', 'editar', 'deletar'];
+    if (configurable.includes(action)) {
+      const cfg = userPermissions[currentUser];
+      if (cfg && typeof cfg[action] === 'boolean') return cfg[action];
+    }
     return USUARIOS[currentUser]?.permissions.includes(action);
   };
 
@@ -611,22 +691,111 @@ export default function SistemaDespacho() {
     } catch (e) { console.error('❌ Erro DOE:', e.text || e.message); }
   };
 
-  const addDocLink = async () => {
-    const url = newDocLink.url.trim();
-    const nome = newDocLink.nome.trim() || 'Documento';
-    if (!url) { alert('Cole o link do documento'); return; }
-    const docs = [...(selectedProcess.documentos || []), { url, nome, adicionadoEm: new Date().toISOString() }];
-    await updateDoc(doc(db, 'processos', selectedProcess.id), { documentos: docs });
-    setSelectedProcess(prev => ({ ...prev, documentos: docs }));
-    setNewDocLink({ url: '', nome: '' });
-    setShowAddDocModal(false);
+  // ─── Upload de PDFs (Firebase Storage) ─────────────────────────────────────
+  const validatePdf = (file) => {
+    if (!file) return false;
+    if (file.type !== 'application/pdf') { alert('Selecione um arquivo PDF.'); return false; }
+    if (file.size > 15 * 1024 * 1024) { alert('PDF muito grande (máximo 15 MB).'); return false; }
+    return true;
   };
 
-  const removeDocLink = async (index) => {
-    const docs = (selectedProcess.documentos || []).filter((_, i) => i !== index);
-    await updateDoc(doc(db, 'processos', selectedProcess.id), { documentos: docs });
-    setSelectedProcess(prev => ({ ...prev, documentos: docs }));
+  const uploadPdf = async (file, pathPrefix) => {
+    const safeName = file.name.replace(/[^\w.\-() ]+/g, '_');
+    const path = `${pathPrefix}/${Date.now()}-${safeName}`;
+    const r = storageRef(storage, path);
+    await uploadBytes(r, file);
+    const url = await getDownloadURL(r);
+    return { url, nome: file.name, storagePath: path, adicionadoEm: new Date().toISOString() };
   };
+
+  // Anexa PDF a uma entidade que guarda os anexos no campo `documentos` (processos, acompanhamentos)
+  const handleUploadDoc = async (e, collectionName, entity, setEntity) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!validatePdf(file) || !entity?.id) return;
+    setUploadingDoc(true);
+    try {
+      const meta = await uploadPdf(file, `${collectionName}/${entity.id}`);
+      const docs = [...(entity.documentos || []), meta];
+      await updateDoc(doc(db, collectionName, entity.id), { documentos: docs });
+      setEntity((prev) => ({ ...prev, documentos: docs }));
+    } catch (err) {
+      console.error('❌ Erro upload PDF:', err);
+      alert('Erro ao enviar o PDF. Verifique as regras do Firebase Storage. ' + err.message);
+    } finally {
+      setUploadingDoc(false);
+    }
+  };
+
+  const handleRemoveDoc = async (collectionName, entity, setEntity, index) => {
+    const docs = entity.documentos || [];
+    const target = docs[index];
+    const updated = docs.filter((_, i) => i !== index);
+    await updateDoc(doc(db, collectionName, entity.id), { documentos: updated });
+    setEntity((prev) => ({ ...prev, documentos: updated }));
+    if (target?.storagePath) {
+      try { await deleteObject(storageRef(storage, target.storagePath)); } catch (e) { /* arquivo já removido */ }
+    }
+  };
+
+  // Anexa um único PDF a uma publicação do DOE
+  const handleUploadDoePdf = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!validatePdf(file) || !selectedDoe?.id) return;
+    setUploadingDoc(true);
+    try {
+      const meta = await uploadPdf(file, `doe/${selectedDoe.id}`);
+      const upd = { pdfUrl: meta.url, pdfNome: meta.nome, pdfPath: meta.storagePath };
+      await updateDoc(doc(db, 'doe', selectedDoe.id), upd);
+      setSelectedDoe((prev) => ({ ...prev, ...upd }));
+    } catch (err) {
+      console.error('❌ Erro upload PDF DOE:', err);
+      alert('Erro ao enviar o PDF. Verifique as regras do Firebase Storage. ' + err.message);
+    } finally {
+      setUploadingDoc(false);
+    }
+  };
+
+  const handleRemoveDoePdf = async () => {
+    const path = selectedDoe?.pdfPath;
+    await updateDoc(doc(db, 'doe', selectedDoe.id), { pdfUrl: null, pdfNome: null, pdfPath: null });
+    setSelectedDoe((prev) => ({ ...prev, pdfUrl: null, pdfNome: null, pdfPath: null }));
+    if (path) {
+      try { await deleteObject(storageRef(storage, path)); } catch (e) { /* arquivo já removido */ }
+    }
+  };
+
+  // Bloco reutilizável de anexos em PDF (processos / acompanhamentos)
+  const renderAttachments = (collectionName, entity, setEntity) => (
+    <div className="info-box">
+      <label>📎 Documentos Anexados (PDF)</label>
+      <div className="attachments">
+        {(entity.documentos || []).length > 0 ? (
+          (entity.documentos || []).map((docItem, i) => (
+            <div key={i} className="attachment-item">
+              <a href={docItem.url} target="_blank" rel="noopener noreferrer" className="attachment-link">
+                <i className="ti ti-file-type-pdf"></i><span>{docItem.nome}</span>
+              </a>
+              {can('editar') && (
+                <button type="button" className="attachment-remove" title="Remover"
+                  onClick={() => handleRemoveDoc(collectionName, entity, setEntity, i)}>✕</button>
+              )}
+            </div>
+          ))
+        ) : (
+          <p className="attachment-empty">Nenhum documento anexado</p>
+        )}
+        {can('editar') && (
+          <label className={`upload-btn ${uploadingDoc ? 'disabled' : ''}`}>
+            <i className="ti ti-upload"></i> {uploadingDoc ? 'Enviando...' : 'Enviar PDF'}
+            <input type="file" accept="application/pdf" disabled={uploadingDoc}
+              onChange={(e) => handleUploadDoc(e, collectionName, entity, setEntity)} style={{ display: 'none' }} />
+          </label>
+        )}
+      </div>
+    </div>
+  );
 
   // Verificar audiências e enviar emails nos prazos certos (5 dias e 1 dia antes)
   // Usa flags no Firestore (notificado5dias / notificado1dia) para evitar emails duplicados
@@ -754,12 +923,29 @@ export default function SistemaDespacho() {
   const handleChangePassword = async () => {
     setPasswordError(''); setPasswordMessage('');
     if (!currentPassword || !newPassword || !confirmPassword) { setPasswordError('Preencha todos os campos'); return; }
-    if (userPasswords[currentUser] !== currentPassword) { setPasswordError('Senha atual incorreta'); return; }
+    const stored = userPasswords[currentUser];
+    const curHash = await hashPassword(currentPassword);
+    const okCurrent = stored === curHash || stored === currentPassword;
+    if (!okCurrent) { setPasswordError('Senha atual incorreta'); return; }
     if (newPassword.length < 6) { setPasswordError('Nova senha deve ter no mínimo 6 caracteres'); return; }
     if (newPassword !== confirmPassword) { setPasswordError('As senhas não coincidem'); return; }
-    const updatedPasswords = { ...userPasswords, [currentUser]: newPassword };
+    const newHash = await hashPassword(newPassword);
+    const updatedPasswords = { ...userPasswords, [currentUser]: newHash };
     setUserPasswords(updatedPasswords);
     await saveConfig(null, null, updatedPasswords);
+    // se este dispositivo lembra o login, atualiza o token para a nova senha
+    try {
+      const saved = localStorage.getItem('asstec_login');
+      if (saved) {
+        const d = JSON.parse(saved);
+        if (d.user === currentUser) {
+          delete d.pass;
+          d.token = newHash;
+          d.timestamp = Date.now();
+          localStorage.setItem('asstec_login', JSON.stringify(d));
+        }
+      }
+    } catch (e) { /* ignora */ }
     setPasswordMessage('Senha alterada com sucesso!');
     setCurrentPassword(''); setNewPassword(''); setConfirmPassword('');
     setTimeout(() => { setPasswordMessage(''); setShowSettings(false); }, 2000);
@@ -874,51 +1060,7 @@ export default function SistemaDespacho() {
                         <p style={{whiteSpace: 'pre-wrap'}}>{selectedProcess.observacoes}</p>
                       </div>
                     )}
-                    <div className="info-box">
-                      <label>📎 Documentos Anexados</label>
-                      <div style={{marginTop: '10px'}}>
-                        {(selectedProcess.documentos || []).length > 0 ? (
-                          <div>
-                            {(selectedProcess.documentos || []).map((doc, i) => (
-                              <div key={i} style={{display: 'flex', alignItems: 'center', padding: '8px 12px', backgroundColor: 'var(--neutral-200)', marginBottom: '8px', borderRadius: '8px', justifyContent: 'space-between'}}>
-                                <div style={{display: 'flex', alignItems: 'center', flex: 1, minWidth: 0}}>
-                                  <span style={{fontSize: '18px', marginRight: '10px', flexShrink: 0}}>📄</span>
-                                  <a href={doc.url} target="_blank" rel="noopener noreferrer" style={{color: '#2c5aa0', textDecoration: 'none', fontWeight: '500', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{doc.nome}</a>
-                                </div>
-                                {can('editar') && (<button type="button" onClick={() => removeDocLink(i)} style={{background: 'none', border: 'none', color: '#a63a3a', cursor: 'pointer', fontSize: '13px', marginLeft: '10px', flexShrink: 0}}>✕ Remover</button>)}
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <p style={{color: '#999', fontSize: '14px'}}>Nenhum documento anexado</p>
-                        )}
-                        {can('editar') && (
-                          <button type="button" onClick={() => setShowAddDocModal(true)} style={{marginTop: '10px', padding: '8px 16px', backgroundColor: '#2c5aa0', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '14px'}}>
-                            + Adicionar Link de Documento
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    {showAddDocModal && (
-                      <div className="modal-overlay">
-                        <div className="modal-box">
-                          <h4>📎 Adicionar Documento</h4>
-                          <p style={{fontSize: '13px', color: '#666', marginBottom: '12px'}}>Cole o link de compartilhamento do Google Drive, OneDrive ou outro serviço.</p>
-                          <div className="form-group">
-                            <label>Nome do Documento</label>
-                            <input type="text" value={newDocLink.nome} onChange={(e) => setNewDocLink(prev => ({...prev, nome: e.target.value}))} placeholder="Ex: Parecer Jurídico nº 001/2024" />
-                          </div>
-                          <div className="form-group">
-                            <label>Link do Documento *</label>
-                            <input type="url" value={newDocLink.url} onChange={(e) => setNewDocLink(prev => ({...prev, url: e.target.value}))} placeholder="https://drive.google.com/..." />
-                          </div>
-                          <div className="modal-actions">
-                            <button className="btn-primary" onClick={addDocLink}>Salvar</button>
-                            <button className="btn-secondary" onClick={() => { setShowAddDocModal(false); setNewDocLink({ url: '', nome: '' }); }}>Cancelar</button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
+                    {renderAttachments('processos', selectedProcess, setSelectedProcess)}
                     {can('despachar') && !selectedProcess.despachado && (
                       <div className="action-buttons">
                         <button className="btn-approve" onClick={() => handleDispatch('prosseguimento')}>✓ Prosseguimento</button>
@@ -1049,6 +1191,7 @@ export default function SistemaDespacho() {
                         onBlur={() => accompEdits.status !== undefined && updateAccompaniment(selectedAccompaniment.id, { status: accompEdits.status })}
                       /></div>
                     </div>
+                    {renderAttachments('acompanhamentos', selectedAccompaniment, setSelectedAccompaniment)}
                     <div className="footer-info">
                       <p>Última Movimentação: <strong>{selectedAccompaniment.dataUltimaEdicao || '—'}</strong></p>
                       {selectedAccompaniment.dataUltimaVerificacao && (
@@ -1263,6 +1406,30 @@ export default function SistemaDespacho() {
                       <label>Conteúdo</label>
                       <div className="doe-content" dangerouslySetInnerHTML={{ __html: formatDoeContent(selectedDoe.conteudo) }} />
                     </div>
+                    <div className="info-box">
+                      <label>📎 DOE em PDF</label>
+                      <div className="attachments">
+                        {selectedDoe.pdfUrl ? (
+                          <div className="attachment-item">
+                            <a href={selectedDoe.pdfUrl} target="_blank" rel="noopener noreferrer" className="attachment-link">
+                              <i className="ti ti-file-type-pdf"></i><span>{selectedDoe.pdfNome || 'DOE.pdf'}</span>
+                            </a>
+                            {can('editar') && (
+                              <button type="button" className="attachment-remove" title="Remover" onClick={handleRemoveDoePdf}>✕</button>
+                            )}
+                          </div>
+                        ) : (
+                          <p className="attachment-empty">Nenhum PDF anexado</p>
+                        )}
+                        {can('editar') && !selectedDoe.pdfUrl && (
+                          <label className={`upload-btn ${uploadingDoc ? 'disabled' : ''}`}>
+                            <i className="ti ti-upload"></i> {uploadingDoc ? 'Enviando...' : 'Anexar DOE em PDF'}
+                            <input type="file" accept="application/pdf" disabled={uploadingDoc}
+                              onChange={handleUploadDoePdf} style={{ display: 'none' }} />
+                          </label>
+                        )}
+                      </div>
+                    </div>
                     <button className="btn-delete" onClick={() => deleteDoe(selectedDoe.id)}>🗑️ Deletar</button>
                   </div>
                 ) : (
@@ -1294,6 +1461,7 @@ export default function SistemaDespacho() {
                         <div key={doe.id} onClick={() => setSelectedDoe(doe)} className="card-item">
                           <div className="card-top"><strong>Diário #{doe.numeroDiario || 'S/N'}</strong><span className="badge">{new Date(doe.dataPublicacao).toLocaleDateString('pt-BR')}</span></div>
                           <div className="doe-preview" dangerouslySetInnerHTML={{ __html: formatDoeContent(doe.conteudo) }} />
+                          {doe.pdfUrl && <p className="card-text" style={{marginTop:'8px', color:'var(--primary-main)', fontWeight:600}}><i className="ti ti-file-type-pdf"></i> PDF anexado</p>}
                         </div>
                       ))
                     )}
@@ -1518,6 +1686,51 @@ export default function SistemaDespacho() {
                           </div>
                         </div>
                       ))}
+                    </div>
+                  )}
+
+                  {/* Permissões de Usuário (leitura/criação/edição/exclusão) */}
+                  <button
+                    className={`settings-accordion-btn ${settingsPanel === 'permissions' ? 'open' : ''}`}
+                    onClick={() => setSettingsPanel(settingsPanel === 'permissions' ? null : 'permissions')}
+                  >
+                    <span><i className="ti ti-user-shield" style={{marginRight:'8px'}}></i>Permissões de Usuário</span>
+                    <i className={`ti ${settingsPanel === 'permissions' ? 'ti-chevron-up' : 'ti-chevron-down'}`}></i>
+                  </button>
+                  {settingsPanel === 'permissions' && (
+                    <div className="settings-accordion-body">
+                      <p style={{fontSize:'12px', color:'var(--text-secondary)', marginBottom:'1rem', lineHeight:'1.5'}}>
+                        Defina o que cada usuário pode fazer: <strong>leitura</strong>, <strong>criação</strong>, <strong>edição</strong> e <strong>exclusão</strong>. O master tem sempre acesso total.
+                      </p>
+                      {Object.entries(USUARIOS).map(([role, info]) => {
+                        if (role === 'master') return null; // master tem acesso total
+                        return (
+                          <div key={role} className="push-config-block">
+                            <div className="push-config-title">
+                              <strong><i className="ti ti-user" style={{marginRight:'6px'}}></i>{info.nome}</strong>
+                            </div>
+                            <div className="push-config-users">
+                              {PERMISSION_ACTIONS.map(({ key, label }) => {
+                                const checked = userPermissions[role]?.[key] === true;
+                                const toggle = async () => {
+                                  const updated = {
+                                    ...userPermissions,
+                                    [role]: { ...userPermissions[role], [key]: !checked }
+                                  };
+                                  setUserPermissions(updated);
+                                  await saveConfig(null, null, null, undefined, undefined, updated);
+                                };
+                                return (
+                                  <label key={key} className={`push-user-chip ${checked ? 'active' : ''}`}>
+                                    <input type="checkbox" checked={checked} onChange={toggle} style={{display:'none'}} />
+                                    {label}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
