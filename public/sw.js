@@ -18,7 +18,7 @@ self.addEventListener('push', (event) => {
     body: data.body || '',
     icon: '/pedra-furada.png',
     badge: '/pedra-furada.png',
-    data: { tab: data.tab || '', itemId: data.itemId || '' },
+    data: { tab: data.tab || '', itemId: data.itemId || '', notifId: data.notifId || '' },
     requireInteraction: true,
     vibrate: [200, 100, 200],
     tag: data.tag || 'asstec-notif',
@@ -33,20 +33,29 @@ self.addEventListener('push', (event) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
 
-  const { tab, itemId } = event.notification.data || {};
+  const { tab, itemId, notifId } = event.notification.data || {};
 
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
       // Tenta focar janela já aberta
       for (const client of windowClients) {
         if ('focus' in client) {
-          client.postMessage({ type: 'NAVIGATE', tab, itemId });
+          client.postMessage({ type: 'NAVIGATE', tab, itemId, notifId });
           return client.focus();
         }
       }
       // Abre nova janela se não houver nenhuma
-      const url = tab ? `/?tab=${tab}` : '/';
+      const url = tab ? `/?tab=${tab}&notifId=${notifId || ''}` : '/';
       if (clients.openWindow) return clients.openWindow(url);
     })
   );
+});
+
+// Fecha um push nativo quando a notificação correspondente é lida no sino (app aberto)
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'CLOSE_NOTIF' && event.data.tag) {
+    self.registration.getNotifications({ tag: event.data.tag }).then((notifs) => {
+      notifs.forEach((n) => n.close());
+    });
+  }
 });

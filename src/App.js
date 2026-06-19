@@ -7,7 +7,7 @@ import { collection, doc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, getD
 import NotificationCenter from './NotificationCenter';
 import NotificationBanner from './NotificationBanner';
 import HearingCalendar from './HearingCalendar';
-import { addAccompanimentNotification, addHearingNotification, addDeadlineNotification, addBanner } from './notification-service';
+import { addBanner } from './notification-service';
 
 const USUARIOS = {
   master: { nome: 'João Evangelista', role: 'master', permissions: ['ver', 'criar', 'editar', 'deletar', 'decidir', 'comentar'] },
@@ -46,6 +46,7 @@ export default function SistemaDespacho() {
   const [showDoeEmailModal, setShowDoeEmailModal] = useState(false);
   const [showAccompEmailModal, setShowAccompEmailModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsPanel, setSettingsPanel] = useState(null); // null | 'features' | 'notifications'
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -86,6 +87,23 @@ export default function SistemaDespacho() {
     prazos:          { master: true,  secretario: true,  chefe_gab: true,  servidora: true,  estagiaria: true  },
   };
   const [pushNotifConfig, setPushNotifConfig] = useState(DEFAULT_PUSH_CONFIG);
+
+  // Configuração de quais abas cada usuário pode visualizar (gerenciado pelo master)
+  const TABS = [
+    { id: 'despacho-gab',    label: 'Despachos',         icon: 'ti-gavel' },
+    { id: 'acompanhamentos', label: 'Acompanhamentos',   icon: 'ti-map-pin' },
+    { id: 'audiencias',      label: 'Audiências',        icon: 'ti-calendar-event' },
+    { id: 'doe',             label: 'DOE/PI',            icon: 'ti-news' },
+    { id: 'prazos',          label: 'Prazos Judiciais',  icon: 'ti-scale' },
+  ];
+  const DEFAULT_TAB_VISIBILITY = TABS.reduce((acc, t) => {
+    acc[t.id] = { master: true, secretario: true, chefe_gab: true, servidora: true, estagiaria: true };
+    return acc;
+  }, {});
+  const [tabVisibility, setTabVisibility] = useState(DEFAULT_TAB_VISIBILITY);
+
+  // master sempre vê tudo; demais respeitam a configuração (default = visível)
+  const tabVisible = (tabId) => currentUser === 'master' || tabVisibility[tabId]?.[currentUser] !== false;
 
   // ─── Helpers para Push Notifications ───────────────────────────────────────
 
@@ -152,6 +170,43 @@ export default function SistemaDespacho() {
       });
     } catch (e) {
       console.warn('⚠️ sendPushForType falhou:', e.message);
+    }
+  };
+
+  // Cria uma notificação persistida no Firebase (aparece no sino/Central para todos
+  // os usuários do público-alvo) e dispara o push para os mesmos usuários.
+  // Como o sino lê do Firebase e o push carrega o id do documento, marcar como lida
+  // em qualquer um dos canais reflete no outro.
+  const createNotification = async (category, { title, main, secondary, icon, tab }) => {
+    try {
+      const config = pushNotifConfig[category] || {};
+      const audience = Object.entries(config).filter(([, on]) => on).map(([role]) => role);
+      if (audience.length === 0) return;
+
+      const ref = await addDoc(collection(db, 'notificacoes'), {
+        category,
+        title: title || '',
+        main: main || '',
+        secondary: secondary || '',
+        icon: icon || '🔔',
+        tab: tab || '',
+        audience,
+        readBy: {},
+        clearedBy: [],
+        createdAt: new Date().toISOString(),
+      });
+
+      // push para os mesmos usuários, carregando o id da notificação (tag = notifId)
+      // para permitir sincronizar o estado de "lida" entre celular e sino.
+      sendPushForType(category, {
+        title: title || 'ASSTEC',
+        body: `${main || ''}${secondary ? '\n' + secondary : ''}`.substring(0, 150),
+        tab: tab || '',
+        tag: ref.id,
+        notifId: ref.id,
+      });
+    } catch (e) {
+      console.warn('⚠️ createNotification falhou:', e.message);
     }
   };
 
@@ -233,6 +288,7 @@ export default function SistemaDespacho() {
           if (data.accompEmails) setAccompEmails(data.accompEmails);
           if (data.userPasswords) setUserPasswords(data.userPasswords);
           if (data.pushNotifConfig) setPushNotifConfig(data.pushNotifConfig);
+          if (data.tabVisibility) setTabVisibility(data.tabVisibility);
         } else {
           console.log('ℹ️ Config ainda não existe no Firebase - será criada ao salvar');
         }
@@ -243,13 +299,14 @@ export default function SistemaDespacho() {
     return () => { unsubProcesses(); unsubAcc(); unsubHearings(); unsubDoe(); unsubDeadlines(); unsubConfig(); };
   }, []);
 
-  const saveConfig = async (newDoeEmails, newAccompEmails, newPasswords, newPushConfig) => {
+  const saveConfig = async (newDoeEmails, newAccompEmails, newPasswords, newPushConfig, newTabVisibility) => {
     try {
       const payload = {
         doeEmails: newDoeEmails !== null ? newDoeEmails : doeEmails,
         accompEmails: newAccompEmails !== null ? newAccompEmails : accompEmails,
         userPasswords: newPasswords !== null ? newPasswords : userPasswords,
         pushNotifConfig: newPushConfig !== undefined ? newPushConfig : pushNotifConfig,
+        tabVisibility: newTabVisibility !== undefined ? newTabVisibility : tabVisibility,
       };
       console.log('💾 Salvando config no Firebase:', payload);
       await setDoc(doc(db, 'config', 'dados'), payload, { merge: true });
@@ -287,13 +344,18 @@ export default function SistemaDespacho() {
     if (!('serviceWorker' in navigator)) return;
     const handler = (event) => {
       if (event.data?.type === 'NAVIGATE') {
-        const { tab } = event.data;
+        const { tab, notifId } = event.data;
         if (tab) setActiveTab(tab);
+        // clicar no push do celular marca a notificação como lida no sino também
+        if (notifId && currentUser) {
+          updateDoc(doc(db, 'notificacoes', notifId), { [`readBy.${currentUser}`]: true })
+            .catch((e) => console.warn('⚠️ Falha ao marcar push como lido:', e.message));
+        }
       }
     };
     navigator.serviceWorker.addEventListener('message', handler);
     return () => navigator.serviceWorker.removeEventListener('message', handler);
-  }, []);
+  }, [currentUser]);
 
   // Navega para aba correta se app foi aberto por clique em notificação (?tab=...)
   useEffect(() => {
@@ -301,7 +363,22 @@ export default function SistemaDespacho() {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get('tab');
     if (tab) setActiveTab(tab);
-  }, [authenticated]);
+    const notifId = params.get('notifId');
+    if (notifId && currentUser) {
+      updateDoc(doc(db, 'notificacoes', notifId), { [`readBy.${currentUser}`]: true })
+        .catch(() => {});
+    }
+  }, [authenticated, currentUser]);
+
+  // Se a aba ativa não for permitida para o usuário, redireciona para a primeira visível
+  useEffect(() => {
+    if (!authenticated) return;
+    if (!tabVisible(activeTab)) {
+      const first = TABS.find((t) => tabVisible(t.id));
+      if (first) setActiveTab(first.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authenticated, currentUser, tabVisibility, activeTab]);
 
   const handleLogout = () => { setAuthenticated(false); setCurrentUser(null); setLoginPass(''); };
 
@@ -364,14 +441,14 @@ export default function SistemaDespacho() {
       .join(' • ');
 
     if (notifEnabled('acompanhamentos')) {
-      addAccompanimentNotification(newSelected, 'updated');
       addBanner(`📍 ${newSelected.numeroProcesso} atualizado`, 'info');
     }
-    sendPushForType('acompanhamentos', {
+    createNotification('acompanhamentos', {
       title: '📍 Nova movimentação',
-      body: `Processo ${newSelected.numeroProcesso}\n${changedFields.substring(0, 100)}`,
+      icon: '📍',
+      main: `Processo ${newSelected.numeroProcesso}`,
+      secondary: changedFields.substring(0, 120),
       tab: 'acompanhamentos',
-      tag: `acc-${id}`,
     });
   };
 
@@ -382,17 +459,8 @@ export default function SistemaDespacho() {
     await updateDoc(doc(db, 'acompanhamentos', id), { verificacaoAtualizada: true, dataUltimaVerificacao: hoje });
     const newSelected = { ...selectedAccompaniment, verificacaoAtualizada: true, dataUltimaVerificacao: hoje };
     setSelectedAccompaniment(newSelected);
-
-    if (notifEnabled('acompanhamentos')) {
-      addAccompanimentNotification(newSelected, 'verified');
-      addBanner(`✅ Verificação do processo ${newSelected.numeroProcesso} atualizada`, 'success');
-    }
-    sendPushForType('acompanhamentos', {
-      title: '📍 Nova movimentação',
-      body: `Processo ${newSelected.numeroProcesso}\n${(newSelected.objeto || '').substring(0, 70)}`,
-      tab: 'acompanhamentos',
-      tag: `acc-verify-${id}`,
-    });
+    // Apenas verificação (sem movimentação/edição de dados): NÃO dispara nenhuma
+    // notificação — nem sino, nem banner, nem push. (requisito 1)
   };
 
   const deleteAccompaniment = async (id) => { await deleteDoc(doc(db, 'acompanhamentos', id)); setSelectedAccompaniment(null); };
@@ -460,11 +528,12 @@ export default function SistemaDespacho() {
       if (notifEnabled('doe')) {
         addBanner(`📰 DOE/PI publicado — Diário #${newDoe.numeroDiario || 'S/N'}`, 'info');
       }
-      sendPushForType('doe', {
+      createNotification('doe', {
         title: '📰 Nova Publicação no DOE',
-        body: `Diário #${newDoe.numeroDiario || 'S/N'} — ${new Date(newDoe.dataPublicacao).toLocaleDateString('pt-BR')}\n${newDoe.conteudo.replace(/\*([^*]+)\*/g, '$1').substring(0, 100)}...`,
+        icon: '📰',
+        main: `Diário #${newDoe.numeroDiario || 'S/N'} — ${new Date(newDoe.dataPublicacao).toLocaleDateString('pt-BR')}`,
+        secondary: `${newDoe.conteudo.replace(/\*([^*]+)\*/g, '$1').substring(0, 100)}...`,
         tab: 'doe',
-        tag: `doe-${newDoe.dataPublicacao}`,
       });
 
       setNewDoe({ dataPublicacao: '', dataDisponibilizacao: '', numeroDiario: '', conteudo: '' });
@@ -576,19 +645,7 @@ export default function SistemaDespacho() {
 
         if (!deveEnviar5 && !deveEnviar1) continue;
 
-        // Notificações in-app — respeitam o config do master
         const diasMsg = deveEnviar5 ? '5 dias' : 'AMANHÃ';
-        if (pushNotifConfig.audiencias?.[currentUser]) {
-          addHearingNotification(hearing, deveEnviar5 ? 'upcoming_5days' : 'upcoming_1day');
-          addBanner(`📅 Audiência ${hearing.seiNumber} em ${diasMsg}!`, 'warning');
-        }
-        sendPushForType('audiencias', {
-          title: `📅 Audiência em ${diasMsg.toUpperCase()}`,
-          body: `Processo ${hearing.seiNumber} — ${new Date(hearing.data).toLocaleDateString('pt-BR')} às ${hearing.hora || 'horário a definir'}`,
-          tab: 'audiencias',
-          tag: `hearing-${hearing.id}-${deveEnviar5 ? '5d' : '1d'}`,
-        });
-
         const templateId = deveEnviar5 ? EMAILJS_CONFIG.TEMPLATES.HEARING_5DAYS : EMAILJS_CONFIG.TEMPLATES.HEARING_1DAY;
         try {
           const recipientEmails = hearing.emailsNotificacao.map(e => String(e).trim()).filter(e => e.length > 0);
@@ -601,9 +658,21 @@ export default function SistemaDespacho() {
               conference_link: hearing.linkSessao || 'Link não informado'
             }, EMAILJS_CONFIG.PUBLIC_KEY);
           }
-          // Marca no Firestore que a notificação já foi enviada
+          // Marca no Firestore que a notificação já foi enviada (evita duplicidade entre dispositivos)
           const flag = deveEnviar5 ? { notificado5dias: true } : { notificado1dia: true };
           await updateDoc(doc(db, 'audiencias', hearing.id), flag);
+
+          // Notificação (sino + push) — disparada uma única vez, junto do flag
+          if (notifEnabled('audiencias')) {
+            addBanner(`📅 Audiência ${hearing.seiNumber} em ${diasMsg}!`, 'warning');
+          }
+          createNotification('audiencias', {
+            title: `📅 Audiência em ${diasMsg}`,
+            icon: '📅',
+            main: `Processo ${hearing.seiNumber}`,
+            secondary: `${new Date(hearing.data).toLocaleDateString('pt-BR')} às ${hearing.hora || 'horário a definir'}`,
+            tab: 'audiencias',
+          });
           console.log(`✅ Email audiência (${deveEnviar5 ? 5 : 1} dias antes) enviado e flag salvo`);
         } catch (e) {
           console.error('❌ Erro audiência:', e.text || e.message);
@@ -634,18 +703,19 @@ export default function SistemaDespacho() {
 
         for (const d of notifDays) {
           if (daysLeft === d && !dl[flagMap[d]]) {
-            if (notifEnabled('prazos')) {
-              addDeadlineNotification(dl, d);
-              addBanner(`⚖️ Prazo ${dl.numeroPJE || dl.numeroSEI} vence em ${d} dia(s)!`, 'warning');
-            }
-            sendPushForType('prazos', {
-              title: `⚖️ Prazo Judicial — ${d} dia(s)`,
-              body: `Processo ${dl.numeroPJE || dl.numeroSEI}\n${dl.objeto ? dl.objeto.substring(0, 80) : ''}\nVence em: ${new Date(dl.prazoFatal).toLocaleDateString('pt-BR')}`,
-              tab: 'prazos',
-              tag: `prazo-${dl.id}-${d}d`,
-            });
             try {
+              // marca o flag primeiro (evita duplicidade entre dispositivos)
               await updateDoc(doc(db, 'prazos', dl.id), { [flagMap[d]]: true });
+              if (notifEnabled('prazos')) {
+                addBanner(`⚖️ Prazo ${dl.numeroPJE || dl.numeroSEI} vence em ${d} dia(s)!`, 'warning');
+              }
+              createNotification('prazos', {
+                title: `⚖️ Prazo Judicial — ${d} dia(s)`,
+                icon: '⚖️',
+                main: `Processo ${dl.numeroPJE || dl.numeroSEI}`,
+                secondary: `${dl.objeto ? dl.objeto.substring(0, 80) + ' — ' : ''}Vence em ${new Date(dl.prazoFatal).toLocaleDateString('pt-BR')}`,
+                tab: 'prazos',
+              });
             } catch (e) { console.warn('⚠️ Erro ao marcar flag prazo:', e.message); }
           }
         }
@@ -734,20 +804,14 @@ export default function SistemaDespacho() {
       <aside className="sidebar">
         <div className="sidebar-header">
           <button className="logo-btn" onClick={() => setActiveTab('despacho-gab')} title="Voltar ao início">
-            <span className="logo-icon">⚖️</span>
+            <span className="logo-icon"><i className="ti ti-scale"></i></span>
             <div className="logo-text"><h2>ASSTEC</h2><p>Gestão Processual</p></div>
           </button>
         </div>
         <nav className="sidebar-nav">
-          {[
-            { id: 'despacho-gab', label: 'Despachos', icon: '📋' },
-            { id: 'acompanhamentos', label: 'Acompanhamentos', icon: '📍' },
-            { id: 'audiencias', label: 'Audiências', icon: '📅' },
-            { id: 'doe', label: 'DOE/PI', icon: '📰' },
-            { id: 'prazos', label: 'Prazos Judiciais', icon: '⚖️' }
-          ].map(tab => (
+          {TABS.filter(tab => tabVisible(tab.id)).map(tab => (
             <button key={tab.id} className={`nav-item ${activeTab === tab.id ? 'active' : ''}`} onClick={() => setActiveTab(tab.id)}>
-              <span className="icon">{tab.icon}</span><span className="label">{tab.label}</span>
+              <span className="icon"><i className={`ti ${tab.icon}`}></i></span><span className="label">{tab.label}</span>
             </button>
           ))}
         </nav>
@@ -758,9 +822,9 @@ export default function SistemaDespacho() {
           </div>
           <div className="sidebar-actions">
             <NotificationCenter currentUser={currentUser} USUARIOS={USUARIOS} />
-            <button className="btn-icon" onClick={() => setShowSettings(!showSettings)} title="Configurações">⚙️</button>
-            <button className="btn-icon" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title="Alternar tema">{theme === 'light' ? '🌙' : '☀️'}</button>
-            <button className="btn-icon btn-logout" onClick={handleLogout} title="Sair">🚪</button>
+            <button className="btn-icon" onClick={() => setShowSettings(!showSettings)} title="Configurações"><i className="ti ti-settings"></i></button>
+            <button className="btn-icon" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title="Alternar tema"><i className={`ti ${theme === 'light' ? 'ti-moon' : 'ti-sun'}`}></i></button>
+            <button className="btn-icon btn-logout" onClick={handleLogout} title="Sair"><i className="ti ti-logout"></i></button>
           </div>
         </div>
       </aside>
@@ -1363,43 +1427,99 @@ export default function SistemaDespacho() {
 
               {currentUser === 'master' && (
                 <div className="settings-section">
-                  <h4>🔔 Notificações por Usuário</h4>
-                  <p style={{fontSize:'12px', color:'var(--neutral-600)', marginBottom:'1rem', lineHeight:'1.5'}}>
-                    Controla <strong>push no celular</strong>, <strong>central de notificações</strong> (sino 🔔) e <strong>banners</strong> de cada usuário.
-                    Para push funcionar, o usuário precisa ter feito login pelo celular ao menos uma vez.
-                  </p>
-                  {[
-                    { key: 'audiencias',      label: '📅 Audiências', desc: '5 e 1 dia antes' },
-                    { key: 'acompanhamentos', label: '📍 Acompanhamentos', desc: 'quando atualizado' },
-                    { key: 'doe',             label: '📰 DOE/PI', desc: 'nova publicação' },
-                    { key: 'prazos',          label: '⚖️ Prazos Judiciais', desc: '10, 5, 3 e 2 dias antes' },
-                  ].map(({ key, label, desc }) => (
-                    <div key={key} className="push-config-block">
-                      <div className="push-config-title">
-                        <strong>{label}</strong>
-                        <span className="push-config-desc">{desc}</span>
-                      </div>
-                      <div className="push-config-users">
-                        {Object.entries(USUARIOS).map(([role, info]) => {
-                          const checked = pushNotifConfig[key]?.[role] || false;
-                          const toggle = async () => {
-                            const updated = {
-                              ...pushNotifConfig,
-                              [key]: { ...pushNotifConfig[key], [role]: !checked }
-                            };
-                            setPushNotifConfig(updated);
-                            await saveConfig(null, null, null, updated);
-                          };
-                          return (
-                            <label key={role} className={`push-user-chip ${checked ? 'active' : ''}`}>
-                              <input type="checkbox" checked={checked} onChange={toggle} style={{display:'none'}} />
-                              {info.nome}
-                            </label>
-                          );
-                        })}
-                      </div>
+                  <h4>🛠️ Administração</h4>
+
+                  {/* Configuração de Funcionalidades (visibilidade das abas) */}
+                  <button
+                    className={`settings-accordion-btn ${settingsPanel === 'features' ? 'open' : ''}`}
+                    onClick={() => setSettingsPanel(settingsPanel === 'features' ? null : 'features')}
+                  >
+                    <span><i className="ti ti-layout-grid" style={{marginRight:'8px'}}></i>Configuração de Funcionalidades</span>
+                    <i className={`ti ${settingsPanel === 'features' ? 'ti-chevron-up' : 'ti-chevron-down'}`}></i>
+                  </button>
+                  {settingsPanel === 'features' && (
+                    <div className="settings-accordion-body">
+                      <p style={{fontSize:'12px', color:'var(--text-secondary)', marginBottom:'1rem', lineHeight:'1.5'}}>
+                        Marque quais usuários podem <strong>visualizar</strong> cada aba. O usuário master sempre vê todas.
+                      </p>
+                      {TABS.map((tab) => (
+                        <div key={tab.id} className="push-config-block">
+                          <div className="push-config-title">
+                            <strong><i className={`ti ${tab.icon}`} style={{marginRight:'6px'}}></i>{tab.label}</strong>
+                          </div>
+                          <div className="push-config-users">
+                            {Object.entries(USUARIOS).map(([role, info]) => {
+                              if (role === 'master') return null; // master sempre vê tudo
+                              const checked = tabVisibility[tab.id]?.[role] !== false;
+                              const toggle = async () => {
+                                const updated = {
+                                  ...tabVisibility,
+                                  [tab.id]: { ...tabVisibility[tab.id], [role]: !checked }
+                                };
+                                setTabVisibility(updated);
+                                await saveConfig(null, null, null, undefined, updated);
+                              };
+                              return (
+                                <label key={role} className={`push-user-chip ${checked ? 'active' : ''}`}>
+                                  <input type="checkbox" checked={checked} onChange={toggle} style={{display:'none'}} />
+                                  {info.nome}
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
+
+                  {/* Configurações de Notificação (push/sino/banners por usuário) */}
+                  <button
+                    className={`settings-accordion-btn ${settingsPanel === 'notifications' ? 'open' : ''}`}
+                    onClick={() => setSettingsPanel(settingsPanel === 'notifications' ? null : 'notifications')}
+                  >
+                    <span><i className="ti ti-bell-cog" style={{marginRight:'8px'}}></i>Configurações de Notificação</span>
+                    <i className={`ti ${settingsPanel === 'notifications' ? 'ti-chevron-up' : 'ti-chevron-down'}`}></i>
+                  </button>
+                  {settingsPanel === 'notifications' && (
+                    <div className="settings-accordion-body">
+                      <p style={{fontSize:'12px', color:'var(--text-secondary)', marginBottom:'1rem', lineHeight:'1.5'}}>
+                        Controla <strong>push no celular</strong>, <strong>central de notificações</strong> (sino) e <strong>banners</strong> de cada usuário.
+                        Para o push funcionar, o usuário precisa ter feito login pelo celular ao menos uma vez.
+                      </p>
+                      {[
+                        { key: 'audiencias',      label: 'Audiências', icon: 'ti-calendar-event', desc: '5 e 1 dia antes' },
+                        { key: 'acompanhamentos', label: 'Acompanhamentos', icon: 'ti-map-pin', desc: 'quando atualizado' },
+                        { key: 'doe',             label: 'DOE/PI', icon: 'ti-news', desc: 'nova publicação' },
+                        { key: 'prazos',          label: 'Prazos Judiciais', icon: 'ti-scale', desc: '10, 5, 3 e 2 dias antes' },
+                      ].map(({ key, label, icon, desc }) => (
+                        <div key={key} className="push-config-block">
+                          <div className="push-config-title">
+                            <strong><i className={`ti ${icon}`} style={{marginRight:'6px'}}></i>{label}</strong>
+                            <span className="push-config-desc">{desc}</span>
+                          </div>
+                          <div className="push-config-users">
+                            {Object.entries(USUARIOS).map(([role, info]) => {
+                              const checked = pushNotifConfig[key]?.[role] || false;
+                              const toggle = async () => {
+                                const updated = {
+                                  ...pushNotifConfig,
+                                  [key]: { ...pushNotifConfig[key], [role]: !checked }
+                                };
+                                setPushNotifConfig(updated);
+                                await saveConfig(null, null, null, updated);
+                              };
+                              return (
+                                <label key={role} className={`push-user-chip ${checked ? 'active' : ''}`}>
+                                  <input type="checkbox" checked={checked} onChange={toggle} style={{display:'none'}} />
+                                  {info.nome}
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1413,9 +1533,9 @@ export default function SistemaDespacho() {
       <div className="mobile-bottom-bar">
         <span className="mobile-user-label">{USUARIOS[currentUser]?.nome}</span>
         <NotificationCenter currentUser={currentUser} USUARIOS={USUARIOS} />
-        <button className="btn-icon" onClick={() => setShowSettings(!showSettings)} title="Configurações">⚙️</button>
-        <button className="btn-icon" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title="Tema">{theme === 'light' ? '🌙' : '☀️'}</button>
-        <button className="btn-icon btn-logout" onClick={handleLogout} title="Sair">🚪</button>
+        <button className="btn-icon" onClick={() => setShowSettings(!showSettings)} title="Configurações"><i className="ti ti-settings"></i></button>
+        <button className="btn-icon" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title="Tema"><i className={`ti ${theme === 'light' ? 'ti-moon' : 'ti-sun'}`}></i></button>
+        <button className="btn-icon btn-logout" onClick={handleLogout} title="Sair"><i className="ti ti-logout"></i></button>
       </div>
     </div>
   );
