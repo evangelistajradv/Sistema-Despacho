@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import './App.css';
 import emailjs from '@emailjs/browser';
 import { EMAILJS_CONFIG } from './emailjs-config';
-import { db, storage } from './firebase-config';
+import { db, storage, authReady } from './firebase-config';
 import { collection, doc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, getDoc } from 'firebase/firestore';
 import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import NotificationCenter from './NotificationCenter';
@@ -285,11 +285,18 @@ export default function SistemaDespacho() {
     }
   }, []);
 
-  // Firebase - Sincronização em tempo real entre TODOS os usuários
+  // Firebase - Sincronização em tempo real entre TODOS os usuários.
+  // Aguarda o login anônimo (authReady) antes de assinar, para funcionar mesmo
+  // quando as regras exigirem autenticação.
   useEffect(() => {
-    console.log('🔥 Conectando ao Firebase...');
+    let cancelled = false;
+    let unsubs = [];
 
-    const unsubProcesses = onSnapshot(
+    authReady.then(() => {
+      if (cancelled) return;
+      console.log('🔥 Conectando ao Firebase...');
+
+      const unsubProcesses = onSnapshot(
       collection(db, 'processos'),
       (snap) => { setProcesses(snap.docs.map(d => ({ id: d.id, ...d.data() }))); },
       (err) => { console.error('❌ Erro processos Firebase:', err.message); }
@@ -334,7 +341,10 @@ export default function SistemaDespacho() {
       (err) => { console.error('❌ Erro config Firebase:', err.message); setConfigLoaded(true); }
     );
 
-    return () => { unsubProcesses(); unsubAcc(); unsubHearings(); unsubDoe(); unsubDeadlines(); unsubConfig(); };
+      unsubs = [unsubProcesses, unsubAcc, unsubHearings, unsubDoe, unsubDeadlines, unsubConfig];
+    });
+
+    return () => { cancelled = true; unsubs.forEach((u) => u && u()); };
   }, []);
 
   const saveConfig = async (newDoeEmails, newAccompEmails, newPasswords, newPushConfig, newTabVisibility, newUserPermissions) => {
