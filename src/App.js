@@ -30,7 +30,7 @@ function PasswordField({ id, value, onChange, placeholder, className }) {
   return (
     <div className="password-field-wrap">
       <input id={id} type={show ? 'text' : 'password'} value={value} onChange={onChange}
-        placeholder={placeholder} className={className} autoComplete="off" />
+        placeholder={placeholder} className={className} autoComplete="new-password" />
       <button type="button" className="password-toggle" tabIndex={-1}
         title={show ? 'Ocultar senha' : 'Mostrar senha'} onClick={() => setShow((s) => !s)}>
         <i className={`ti ${show ? 'ti-eye-off' : 'ti-eye'}`}></i>
@@ -1268,7 +1268,7 @@ export default function SistemaDespacho() {
             <p className="login-subtitle">Cadastre seu e-mail para continuar</p>
             <div className="form-group">
               <label htmlFor="usuario-reg">Usuário</label>
-              <select id="usuario-reg" value={loginUser} onChange={(e) => setLoginUser(e.target.value)} className="login-input">
+              <select id="usuario-reg" value={loginUser} onChange={(e) => { setLoginUser(e.target.value); setRegCurrentPass(''); setRegNewPass(''); setRegConfirmPass(''); setRegError(''); }} className="login-input">
                 {Object.entries(ALL_USERS).map(([role, info]) => (
                   <option key={role} value={role}>{role === 'master' ? 'Master' : info.nome}</option>
                 ))}
@@ -1316,7 +1316,7 @@ export default function SistemaDespacho() {
           <p className="login-subtitle">Sistema de Gestão Processual</p>
           <div className="form-group">
             <label htmlFor="usuario">Usuário</label>
-            <select id="usuario" value={loginUser} onChange={(e) => { setLoginUser(e.target.value); setForgotMsg(''); }} className="login-input">
+            <select id="usuario" value={loginUser} onChange={(e) => { setLoginUser(e.target.value); setForgotMsg(''); setLoginPass(''); }} className="login-input">
               {Object.entries(ALL_USERS).map(([role, info]) => (
                 <option key={role} value={role}>{role === 'master' ? 'Master' : info.nome}</option>
               ))}
