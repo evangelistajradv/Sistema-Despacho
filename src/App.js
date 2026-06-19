@@ -2,13 +2,13 @@ import React, { useState, useEffect } from 'react';
 import './App.css';
 import emailjs from '@emailjs/browser';
 import { EMAILJS_CONFIG } from './emailjs-config';
-import { db, storage, authReady, auth, roleEmail, roleFromEmail } from './firebase-config';
+import { db, storage, authReady, auth, roleEmail } from './firebase-config';
 import { collection, doc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, getDoc } from 'firebase/firestore';
 import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import {
   signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, updatePassword,
   EmailAuthProvider, reauthenticateWithCredential, setPersistence,
-  browserLocalPersistence, browserSessionPersistence, onAuthStateChanged,
+  browserLocalPersistence, browserSessionPersistence, onAuthStateChanged, sendPasswordResetEmail,
 } from 'firebase/auth';
 import NotificationCenter from './NotificationCenter';
 import NotificationBanner from './NotificationBanner';
@@ -29,8 +29,18 @@ export default function SistemaDespacho() {
   const [loginUser, setLoginUser] = useState('master');
   const [loginPass, setLoginPass] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
-  const [, setConfigLoaded] = useState(false);
+  const [configLoaded, setConfigLoaded] = useState(false);
   const [authChecked, setAuthChecked] = useState(false); // já conferiu se há sessão real salva pelo Firebase
+  const [restoredUser, setRestoredUser] = useState(null); // usuário real (não anônimo) restaurado pelo Firebase
+  const [userEmails, setUserEmails] = useState({}); // { role: email } — e-mail real cadastrado por cada pessoa
+  const [emailRegistered, setEmailRegistered] = useState({}); // { role: true } — já completou o cadastro do e-mail
+  const [forceReRegister, setForceReRegister] = useState({}); // { role: true } — master autorizou recadastro sem senha atual
+  const [regEmail, setRegEmail] = useState('');
+  const [regCurrentPass, setRegCurrentPass] = useState('');
+  const [regNewPass, setRegNewPass] = useState('');
+  const [regConfirmPass, setRegConfirmPass] = useState('');
+  const [regError, setRegError] = useState('');
+  const [forgotMsg, setForgotMsg] = useState('');
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light');
   const [activeTab, setActiveTab] = useState('despacho-gab');
   const [processes, setProcesses] = useState([]);
@@ -261,14 +271,21 @@ export default function SistemaDespacho() {
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
       setAuthChecked(true);
-      if (user && !user.isAnonymous) {
-        const role = roleFromEmail(user.email);
-        if (USUARIOS[role]) finishLogin(role);
-      }
+      setRestoredUser(user && !user.isAnonymous ? user : null);
     });
     return () => unsub();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Descobre a quem pertence a sessão restaurada (por e-mail real cadastrado,
+  // ou pelo e-mail técnico antigo de quem ainda não recadastrou) e entra
+  // automaticamente. Só decide depois que a config (e-mails) já carregou.
+  useEffect(() => {
+    if (!restoredUser || authenticated || !configLoaded) return;
+    const role = Object.keys(USUARIOS).find((r) => userEmails[r] === restoredUser.email)
+      || Object.keys(USUARIOS).find((r) => roleEmail(r) === restoredUser.email);
+    if (role) finishLogin(role);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restoredUser, configLoaded, userEmails, authenticated]);
 
   // Tema - apenas local (preferência de cada dispositivo)
   useEffect(() => {
@@ -304,6 +321,9 @@ export default function SistemaDespacho() {
             if (data.pushNotifConfig) setPushNotifConfig(data.pushNotifConfig);
             if (data.tabVisibility) setTabVisibility(data.tabVisibility);
             if (data.userPermissions) setUserPermissions(data.userPermissions);
+            if (data.userEmails) setUserEmails(data.userEmails);
+            if (data.emailRegistered) setEmailRegistered(data.emailRegistered);
+            if (data.forceReRegister) setForceReRegister(data.forceReRegister);
           } else {
             console.log('ℹ️ Config ainda não existe no Firebase - será criada ao salvar');
           }
@@ -351,15 +371,14 @@ export default function SistemaDespacho() {
     return () => { unsubProcesses(); unsubAcc(); unsubHearings(); unsubDoe(); unsubDeadlines(); };
   }, [authenticated]);
 
-  const saveConfig = async (newDoeEmails, newAccompEmails, newPasswords, newPushConfig, newTabVisibility, newUserPermissions) => {
+  // Salva a config no Firebase. Recebe só os campos que mudaram (overrides);
+  // o restante é preenchido com o valor atual em memória.
+  const saveConfig = async (overrides = {}) => {
     try {
       const payload = {
-        doeEmails: newDoeEmails !== null ? newDoeEmails : doeEmails,
-        accompEmails: newAccompEmails !== null ? newAccompEmails : accompEmails,
-        userPasswords: newPasswords !== null ? newPasswords : userPasswords,
-        pushNotifConfig: newPushConfig !== undefined ? newPushConfig : pushNotifConfig,
-        tabVisibility: newTabVisibility !== undefined ? newTabVisibility : tabVisibility,
-        userPermissions: newUserPermissions !== undefined ? newUserPermissions : userPermissions,
+        doeEmails, accompEmails, userPasswords, pushNotifConfig, tabVisibility, userPermissions,
+        userEmails, emailRegistered, forceReRegister,
+        ...overrides,
       };
       console.log('💾 Salvando config no Firebase:', payload);
       await setDoc(doc(db, 'config', 'dados'), payload, { merge: true });
@@ -377,49 +396,109 @@ export default function SistemaDespacho() {
     setTimeout(() => registerPushSubscription(role), 1500);
   };
 
-  // Login com o Firebase Authentication "de verdade" (e-mail técnico + senha).
-  // Quem ainda não migrou (primeiro login após a atualização de segurança) é
-  // migrado automaticamente: a senha digitada é conferida contra o hash antigo
-  // salvo no Firestore e, se bater, uma conta real é criada na hora — sem o
-  // usuário perceber nada diferente.
+  // Login normal: só aparece depois que a pessoa já cadastrou seu e-mail real.
   const handleLogin = async (e) => {
     e.preventDefault();
     const role = loginUser;
     if (!USUARIOS[role]) { alert('Usuário inválido'); return; }
     if (!loginPass) { alert('Digite sua senha'); return; }
+    const email = userEmails[role];
+    if (!email) { alert('Cadastre seu e-mail primeiro.'); return; }
 
     try {
       await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence);
     } catch (e) { /* navegador sem suporte a persistência; segue com o padrão */ }
 
     try {
-      await signInWithEmailAndPassword(auth, roleEmail(role), loginPass);
+      await signInWithEmailAndPassword(auth, email, loginPass);
       finishLogin(role);
-      return;
     } catch (err) {
-      // Pode ser conta ainda não migrada OU senha incorreta — confere a senha
-      // antiga salva no Firestore antes de decidir.
+      console.error('❌ Erro de login:', err.message);
+      alert('Usuário ou senha inválida');
+    }
+  };
+
+  // Cadastro do e-mail real + nova senha — aparece automaticamente no próximo
+  // login de quem ainda não fez isso (emailRegistered[role] ainda não é true).
+  // Por segurança, exige a senha atual (antiga ou já migrada) para provar que é
+  // a própria pessoa — exceto quando o master autoriza um recadastro sem ela
+  // (forceReRegister), para quem perdeu a senha antiga.
+  const handleRegisterEmail = async (e) => {
+    e.preventDefault();
+    const role = loginUser;
+    setRegError('');
+    if (!regEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(regEmail)) { setRegError('Digite um e-mail válido'); return; }
+    if (regNewPass.length < 6) { setRegError('A nova senha deve ter no mínimo 6 caracteres'); return; }
+    if (regNewPass !== regConfirmPass) { setRegError('As senhas não coincidem'); return; }
+
+    const bypass = !!forceReRegister[role];
+    if (!bypass) {
+      if (!regCurrentPass) { setRegError('Digite sua senha atual'); return; }
       const stored = userPasswords[role];
-      const typedHash = await hashPassword(loginPass);
-      const legacyOk = !!stored && (stored === typedHash || stored === loginPass);
-      if (!legacyOk) { alert('Usuário ou senha inválida'); return; }
+      const typedHash = await hashPassword(regCurrentPass);
+      const legacyOk = !!stored && (stored === typedHash || stored === regCurrentPass);
+      let synthOk = false;
+      if (!legacyOk) {
+        try { await signInWithEmailAndPassword(auth, roleEmail(role), regCurrentPass); synthOk = true; }
+        catch (e) { /* não é essa senha também */ }
+      }
+      if (!legacyOk && !synthOk) { setRegError('Senha atual incorreta'); return; }
+    }
+
+    try {
       try {
-        await createUserWithEmailAndPassword(auth, roleEmail(role), loginPass);
-        // a senha antiga não é mais usada para autenticar; some do banco
-        const cleared = { ...userPasswords, [role]: null };
-        setUserPasswords(cleared);
-        saveConfig(null, null, cleared);
-        finishLogin(role);
-      } catch (createErr) {
-        if (createErr.code === 'auth/email-already-in-use') {
-          // a conta já existe (já migrada antes): então a senha está errada mesmo
-          alert('Usuário ou senha inválida');
-        } else {
-          console.error('❌ Erro ao migrar conta:', createErr.message);
-          alert('Erro ao migrar sua conta: ' + createErr.message);
-        }
+        await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence);
+      } catch (e) { /* ignora */ }
+      await createUserWithEmailAndPassword(auth, regEmail, regNewPass);
+      const newEmails = { ...userEmails, [role]: regEmail };
+      const newRegistered = { ...emailRegistered, [role]: true };
+      const newForce = { ...forceReRegister, [role]: false };
+      const newLegacyPasswords = { ...userPasswords, [role]: null };
+      setUserEmails(newEmails); setEmailRegistered(newRegistered); setForceReRegister(newForce); setUserPasswords(newLegacyPasswords);
+      await saveConfig({ userEmails: newEmails, emailRegistered: newRegistered, forceReRegister: newForce, userPasswords: newLegacyPasswords });
+      setRegEmail(''); setRegCurrentPass(''); setRegNewPass(''); setRegConfirmPass('');
+      finishLogin(role);
+    } catch (err) {
+      if (err.code === 'auth/email-already-in-use') {
+        setRegError('Esse e-mail já está cadastrado em outra conta do sistema.');
+      } else {
+        setRegError('Erro ao cadastrar: ' + err.message);
       }
     }
+  };
+
+  // "Esqueci minha senha" — manda o link oficial do Firebase para o e-mail já cadastrado.
+  const handleForgotPassword = async () => {
+    setForgotMsg('');
+    const email = userEmails[loginUser];
+    if (!email) { setForgotMsg('Cadastre seu e-mail primeiro fazendo login normalmente.'); return; }
+    try {
+      await sendPasswordResetEmail(auth, email);
+      setForgotMsg(`Enviamos um link de redefinição para ${email}.`);
+    } catch (err) {
+      setForgotMsg('Erro ao enviar e-mail: ' + err.message);
+    }
+  };
+
+  // ─── Ações do master sobre credenciais de outros usuários ──────────────────
+  const sendResetTo = async (role) => {
+    const email = userEmails[role];
+    if (!email) { alert('Esse usuário ainda não cadastrou um e-mail.'); return; }
+    try {
+      await sendPasswordResetEmail(auth, email);
+      alert(`Link de redefinição enviado para ${email}.`);
+    } catch (e) {
+      alert('Erro ao enviar: ' + e.message);
+    }
+  };
+
+  const forceRoleReRegister = async (role) => {
+    if (!window.confirm(`Forçar ${USUARIOS[role]?.nome} a cadastrar um novo e-mail e senha no próximo login, sem precisar da senha atual?`)) return;
+    const newRegistered = { ...emailRegistered, [role]: false };
+    const newForce = { ...forceReRegister, [role]: true };
+    setEmailRegistered(newRegistered); setForceReRegister(newForce);
+    await saveConfig({ emailRegistered: newRegistered, forceReRegister: newForce });
+    alert(`Pronto. No próximo login, ${USUARIOS[role]?.nome} vai cadastrar um e-mail e senha novos.`);
   };
 
   // Navegação a partir do clique em notificação push (service worker envia mensagem)
@@ -666,28 +745,28 @@ export default function SistemaDespacho() {
     const emails = parseEmails(newDoeEmail);
     const updated = [...doeEmails, ...emails.filter(e => !doeEmails.includes(e))];
     setDoeEmails(updated);
-    await saveConfig(updated, null, null);
+    await saveConfig({ doeEmails: updated });
     setNewDoeEmail('');
   };
 
   const removeDoeEmail = async (email) => {
     const updated = doeEmails.filter(e => e !== email);
     setDoeEmails(updated);
-    await saveConfig(updated, null, null);
+    await saveConfig({ doeEmails: updated });
   };
 
   const addAccompEmail = async () => {
     const emails = parseEmails(newAccompEmail);
     const updated = [...accompEmails, ...emails.filter(e => !accompEmails.includes(e))];
     setAccompEmails(updated);
-    await saveConfig(null, updated, null);
+    await saveConfig({ accompEmails: updated });
     setNewAccompEmail('');
   };
 
   const removeAccompEmail = async (email) => {
     const updated = accompEmails.filter(e => e !== email);
     setAccompEmails(updated);
-    await saveConfig(null, updated, null);
+    await saveConfig({ accompEmails: updated });
   };
 
   const formatDoeContent = (content) => {
@@ -1015,7 +1094,7 @@ export default function SistemaDespacho() {
     if (newPassword.length < 6) { setPasswordError('Nova senha deve ter no mínimo 6 caracteres'); return; }
     if (newPassword !== confirmPassword) { setPasswordError('As senhas não coincidem'); return; }
     try {
-      const cred = EmailAuthProvider.credential(roleEmail(currentUser), currentPassword);
+      const cred = EmailAuthProvider.credential(userEmails[currentUser], currentPassword);
       await reauthenticateWithCredential(auth.currentUser, cred);
       await updatePassword(auth.currentUser, newPassword);
       setPasswordMessage('Senha alterada com sucesso!');
@@ -1031,11 +1110,57 @@ export default function SistemaDespacho() {
   };
 
   if (!authenticated) {
-    if (!authChecked) {
-      // Evita o "flash" da tela de login enquanto o Firebase confere se já
-      // existe uma sessão salva neste dispositivo.
+    if (!authChecked || !configLoaded) {
+      // Evita o "flash" da tela errada enquanto o Firebase confere se já existe
+      // uma sessão salva e a config (e-mails cadastrados) termina de carregar.
       return <div className="login-container" style={{ backgroundImage: `url(${process.env.PUBLIC_URL}/passaros-wallpaper.jpg)` }}><div className="login-overlay"></div></div>;
     }
+
+    const needsRegistration = !emailRegistered[loginUser];
+
+    if (needsRegistration) {
+      return (
+        <div className="login-container" style={{ backgroundImage: `url(${process.env.PUBLIC_URL}/passaros-wallpaper.jpg)` }}>
+          <div className="login-overlay"></div>
+          <form className="login-form" onSubmit={handleRegisterEmail}>
+            <div className="logo-login"><span className="logo-icon">⚖️</span><h1>ASSTEC</h1></div>
+            <p className="login-subtitle">Cadastre seu e-mail para continuar</p>
+            <div className="form-group">
+              <label htmlFor="usuario-reg">Usuário</label>
+              <select id="usuario-reg" value={loginUser} onChange={(e) => setLoginUser(e.target.value)} className="login-input">
+                <option value="master">Master</option>
+                <option value="secretario">{USUARIOS.secretario.nome}</option>
+                <option value="chefe_gab">{USUARIOS.chefe_gab.nome}</option>
+                <option value="servidora">{USUARIOS.servidora.nome}</option>
+                <option value="estagiaria">{USUARIOS.estagiaria.nome}</option>
+              </select>
+            </div>
+            {!forceReRegister[loginUser] && (
+              <div className="form-group">
+                <label htmlFor="reg-senha-atual">Sua senha atual</label>
+                <input id="reg-senha-atual" type="password" value={regCurrentPass} onChange={(e) => setRegCurrentPass(e.target.value)} placeholder="A senha que você já usa" className="login-input" />
+              </div>
+            )}
+            <div className="form-group">
+              <label htmlFor="reg-email">Seu e-mail</label>
+              <input id="reg-email" type="email" value={regEmail} onChange={(e) => setRegEmail(e.target.value)} placeholder="seuemail@exemplo.com" className="login-input" />
+            </div>
+            <div className="form-group">
+              <label htmlFor="reg-senha-nova">Nova senha</label>
+              <input id="reg-senha-nova" type="password" value={regNewPass} onChange={(e) => setRegNewPass(e.target.value)} placeholder="Mínimo 6 caracteres" className="login-input" />
+            </div>
+            <div className="form-group" style={{marginBottom:'1.2rem'}}>
+              <label htmlFor="reg-senha-confirma">Confirmar nova senha</label>
+              <input id="reg-senha-confirma" type="password" value={regConfirmPass} onChange={(e) => setRegConfirmPass(e.target.value)} placeholder="Repita a nova senha" className="login-input" />
+            </div>
+            {regError && <p className="login-footer" style={{color:'var(--danger-main, #dc2626)'}}>{regError}</p>}
+            <button type="submit" className="login-button">Cadastrar e Entrar</button>
+            <p className="login-footer">Esse cadastro é feito uma vez só. Da próxima vez, você entra direto com seu e-mail e senha.</p>
+          </form>
+        </div>
+      );
+    }
+
     return (
       <div className="login-container" style={{ backgroundImage: `url(${process.env.PUBLIC_URL}/passaros-wallpaper.jpg)` }}>
         <div className="login-overlay"></div>
@@ -1044,7 +1169,7 @@ export default function SistemaDespacho() {
           <p className="login-subtitle">Sistema de Gestão Processual</p>
           <div className="form-group">
             <label htmlFor="usuario">Usuário</label>
-            <select id="usuario" value={loginUser} onChange={(e) => setLoginUser(e.target.value)} className="login-input">
+            <select id="usuario" value={loginUser} onChange={(e) => { setLoginUser(e.target.value); setForgotMsg(''); }} className="login-input">
               <option value="master">Master</option>
               <option value="secretario">{USUARIOS.secretario.nome}</option>
               <option value="chefe_gab">{USUARIOS.chefe_gab.nome}</option>
@@ -1063,7 +1188,10 @@ export default function SistemaDespacho() {
             </label>
           </div>
           <button type="submit" className="login-button">Entrar no Sistema</button>
-          <p className="login-footer">Use sua senha cadastrada para entrar.</p>
+          <button type="button" className="link-btn" style={{marginTop:'10px', width:'100%', justifyContent:'center'}} onClick={handleForgotPassword}>
+            Esqueci minha senha
+          </button>
+          {forgotMsg && <p className="login-footer">{forgotMsg}</p>}
         </form>
       </div>
     );
@@ -1724,7 +1852,7 @@ export default function SistemaDespacho() {
                                   [tab.id]: { ...tabVisibility[tab.id], [role]: !checked }
                                 };
                                 setTabVisibility(updated);
-                                await saveConfig(null, null, null, undefined, updated);
+                                await saveConfig({ tabVisibility: updated });
                               };
                               return (
                                 <label key={role} className={`push-user-chip ${checked ? 'active' : ''}`}>
@@ -1773,7 +1901,7 @@ export default function SistemaDespacho() {
                                   [key]: { ...pushNotifConfig[key], [role]: !checked }
                                 };
                                 setPushNotifConfig(updated);
-                                await saveConfig(null, null, null, updated);
+                                await saveConfig({ pushNotifConfig: updated });
                               };
                               return (
                                 <label key={role} className={`push-user-chip ${checked ? 'active' : ''}`}>
@@ -1817,7 +1945,7 @@ export default function SistemaDespacho() {
                                     [role]: { ...userPermissions[role], [key]: !checked }
                                   };
                                   setUserPermissions(updated);
-                                  await saveConfig(null, null, null, undefined, undefined, updated);
+                                  await saveConfig({ userPermissions: updated });
                                 };
                                 return (
                                   <label key={key} className={`push-user-chip ${checked ? 'active' : ''}`}>
@@ -1830,6 +1958,42 @@ export default function SistemaDespacho() {
                           </div>
                         );
                       })}
+                    </div>
+                  )}
+
+                  {/* Credenciais (e-mail e senha) de cada usuário */}
+                  <button
+                    className={`settings-accordion-btn ${settingsPanel === 'credentials' ? 'open' : ''}`}
+                    onClick={() => setSettingsPanel(settingsPanel === 'credentials' ? null : 'credentials')}
+                  >
+                    <span><i className="ti ti-key" style={{marginRight:'8px'}}></i>Credenciais dos Usuários</span>
+                    <i className={`ti ${settingsPanel === 'credentials' ? 'ti-chevron-up' : 'ti-chevron-down'}`}></i>
+                  </button>
+                  {settingsPanel === 'credentials' && (
+                    <div className="settings-accordion-body">
+                      <p style={{fontSize:'12px', color:'var(--text-secondary)', marginBottom:'1rem', lineHeight:'1.5'}}>
+                        Envie um link de redefinição de senha para o e-mail já cadastrado, ou force um novo cadastro
+                        (a pessoa define um e-mail e uma senha novos no próximo login, sem precisar da senha atual).
+                      </p>
+                      {Object.entries(USUARIOS).map(([role, info]) => (
+                        <div key={role} className="push-config-block">
+                          <div className="push-config-title">
+                            <strong><i className="ti ti-user" style={{marginRight:'6px'}}></i>{info.nome}</strong>
+                            <span style={{marginLeft:'10px', fontSize:'12px', color:'var(--text-secondary)'}}>
+                              {userEmails[role] ? userEmails[role] : 'E-mail ainda não cadastrado'}
+                            </span>
+                          </div>
+                          <div className="push-config-users">
+                            <button type="button" className="link-btn" disabled={!userEmails[role]}
+                              onClick={() => sendResetTo(role)}>
+                              <i className="ti ti-mail"></i> Enviar redefinição de senha
+                            </button>
+                            <button type="button" className="link-btn" onClick={() => forceRoleReRegister(role)}>
+                              <i className="ti ti-refresh"></i> Forçar novo cadastro
+                            </button>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
