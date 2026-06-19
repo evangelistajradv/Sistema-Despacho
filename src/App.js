@@ -24,6 +24,12 @@ const USUARIOS = {
   estagiaria: { nome: 'Maria Clara', role: 'estagiaria', permissions: ['ver', 'editar', 'criar', 'comentar'] }
 };
 
+// Painel inicial (dashboard) — o que aparece é configurável pelo master
+const DEFAULT_DASHBOARD_CONFIG = {
+  showPendentes: true, showPrazos: true, showAudiencias: true, showAcompanhamentos: true,
+  diasAcompanhamento: 7, diasPrazoAlerta: 7,
+};
+
 export default function SistemaDespacho() {
   const [authenticated, setAuthenticated] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
@@ -48,7 +54,7 @@ export default function SistemaDespacho() {
   const [regError, setRegError] = useState('');
   const [forgotMsg, setForgotMsg] = useState('');
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light');
-  const [activeTab, setActiveTab] = useState('despacho-gab');
+  const [activeTab, setActiveTab] = useState('painel');
   const [processes, setProcesses] = useState([]);
   const [accompaniments, setAccompaniments] = useState([]);
   const [selectedProcess, setSelectedProcess] = useState(null);
@@ -107,6 +113,8 @@ export default function SistemaDespacho() {
   // Edição inline de audiências
   const [hearingEdits, setHearingEdits] = useState({});
 
+  const [dashboardConfig, setDashboardConfig] = useState(DEFAULT_DASHBOARD_CONFIG);
+
   // Configuração de quais usuários recebem push por tipo (gerenciado pelo master)
   const DEFAULT_PUSH_CONFIG = {
     audiencias:      { master: false, secretario: false, chefe_gab: false, servidora: true,  estagiaria: true  },
@@ -118,6 +126,7 @@ export default function SistemaDespacho() {
 
   // Configuração de quais abas cada usuário pode visualizar (gerenciado pelo master)
   const TABS = [
+    { id: 'painel',          label: 'Painel',            icon: 'ti-layout-dashboard' },
     { id: 'despacho-gab',    label: 'Despachos',         icon: 'ti-gavel' },
     { id: 'acompanhamentos', label: 'Acompanhamentos',   icon: 'ti-map-pin' },
     { id: 'audiencias',      label: 'Audiências',        icon: 'ti-calendar-event' },
@@ -261,6 +270,17 @@ export default function SistemaDespacho() {
     return emailString.split(/[,;]/).map(e => e.trim()).filter(e => e && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
   };
 
+  // Urgência de um prazo fatal: usado no Painel e na lista de Prazos Judiciais.
+  const prazoStatus = (prazoFatal) => {
+    const daysLeft = Math.ceil((new Date(prazoFatal + 'T23:59:59') - new Date()) / (1000 * 60 * 60 * 24));
+    const vencido = daysLeft < 0;
+    const urgente = !vencido && daysLeft <= 3;
+    const alerta = !vencido && daysLeft <= 7;
+    const cor = vencido ? 'var(--accent-red)' : urgente ? '#e85d04' : alerta ? '#f48c06' : 'var(--primary-main)';
+    const label = vencido ? 'VENCIDO' : daysLeft === 0 ? 'HOJE!' : `${daysLeft} dia(s)`;
+    return { daysLeft, vencido, urgente, alerta, cor, label };
+  };
+
   // ─── Segurança: hash de senha (SHA-256) ────────────────────────────────────
   const hashPassword = async (text) => {
     try {
@@ -332,6 +352,7 @@ export default function SistemaDespacho() {
             if (data.emailRegistered) setEmailRegistered(data.emailRegistered);
             if (data.forceReRegister) setForceReRegister(data.forceReRegister);
             if (data.customUsers) setCustomUsers(data.customUsers);
+            if (data.dashboardConfig) setDashboardConfig({ ...DEFAULT_DASHBOARD_CONFIG, ...data.dashboardConfig });
           } else {
             console.log('ℹ️ Config ainda não existe no Firebase - será criada ao salvar');
           }
@@ -385,7 +406,7 @@ export default function SistemaDespacho() {
     try {
       const payload = {
         doeEmails, accompEmails, userPasswords, pushNotifConfig, tabVisibility, userPermissions,
-        userEmails, emailRegistered, forceReRegister, customUsers,
+        userEmails, emailRegistered, forceReRegister, customUsers, dashboardConfig,
         ...overrides,
       };
       console.log('💾 Salvando config no Firebase:', payload);
@@ -1314,7 +1335,7 @@ export default function SistemaDespacho() {
     <div className="app-container">
       <aside className="sidebar">
         <div className="sidebar-header">
-          <button className="logo-btn" onClick={() => setActiveTab('despacho-gab')} title="Voltar ao início">
+          <button className="logo-btn" onClick={() => setActiveTab('painel')} title="Voltar ao início">
             <span className="logo-icon"><i className="ti ti-scale"></i></span>
             <div className="logo-text"><h2>ASSTEC</h2><p>Gestão Processual</p></div>
           </button>
@@ -1343,6 +1364,116 @@ export default function SistemaDespacho() {
       <div className="main-wrapper">
         <main className="main-content">
           <div className="content-area">
+            {activeTab === 'painel' && (() => {
+              const pendentes = processes.filter((p) => !p.despachado);
+              const prazosOrdenados = [...deadlines]
+                .filter((dl) => dl.prazoFatal)
+                .map((dl) => ({ ...dl, _status: prazoStatus(dl.prazoFatal) }))
+                .filter((dl) => dl._status.daysLeft <= dashboardConfig.diasPrazoAlerta)
+                .sort((a, b) => a._status.daysLeft - b._status.daysLeft);
+              const hoje = new Date();
+              const fimSemana = new Date(); fimSemana.setDate(fimSemana.getDate() + 7);
+              const audienciasSemana = [...hearings]
+                .filter((h) => h.data && new Date(h.data) >= hoje && new Date(h.data) <= fimSemana)
+                .sort((a, b) => new Date(a.data) - new Date(b.data));
+              const limiteMovimentacao = new Date(); limiteMovimentacao.setDate(limiteMovimentacao.getDate() - dashboardConfig.diasAcompanhamento);
+              const acompanhamentosMovimentados = [...accompaniments]
+                .filter((acc) => acc.dataUltimaEdicao && new Date(acc.dataUltimaEdicao) >= limiteMovimentacao)
+                .sort((a, b) => new Date(b.dataUltimaEdicao) - new Date(a.dataUltimaEdicao));
+
+              return (
+                <div className="list-view">
+                  <div className="list-header"><h3>📊 Painel</h3></div>
+
+                  <div className="dashboard-kpis">
+                    {dashboardConfig.showPendentes && tabVisible('despacho-gab') && (
+                      <button type="button" className="kpi-card" onClick={() => setActiveTab('despacho-gab')}>
+                        <span className="kpi-value">{pendentes.length}</span>
+                        <span className="kpi-label"><i className="ti ti-gavel"></i> Despachos pendentes</span>
+                      </button>
+                    )}
+                    {dashboardConfig.showPrazos && tabVisible('prazos') && (
+                      <button type="button" className="kpi-card" onClick={() => setActiveTab('prazos')}>
+                        <span className="kpi-value">{prazosOrdenados.length}</span>
+                        <span className="kpi-label"><i className="ti ti-scale"></i> Prazos vencendo (até {dashboardConfig.diasPrazoAlerta}d)</span>
+                      </button>
+                    )}
+                    {dashboardConfig.showAudiencias && tabVisible('audiencias') && (
+                      <button type="button" className="kpi-card" onClick={() => setActiveTab('audiencias')}>
+                        <span className="kpi-value">{audienciasSemana.length}</span>
+                        <span className="kpi-label"><i className="ti ti-calendar-event"></i> Audiências esta semana</span>
+                      </button>
+                    )}
+                    {dashboardConfig.showAcompanhamentos && tabVisible('acompanhamentos') && (
+                      <button type="button" className="kpi-card" onClick={() => setActiveTab('acompanhamentos')}>
+                        <span className="kpi-value">{acompanhamentosMovimentados.length}</span>
+                        <span className="kpi-label"><i className="ti ti-map-pin"></i> Acompanhamentos movimentados</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {dashboardConfig.showPrazos && tabVisible('prazos') && (
+                    <div className="dashboard-widget">
+                      <h4><i className="ti ti-scale"></i> Prazos vencendo</h4>
+                      {prazosOrdenados.length === 0 ? (
+                        <p className="dashboard-empty">Nenhum prazo vencendo nos próximos {dashboardConfig.diasPrazoAlerta} dias.</p>
+                      ) : (
+                        prazosOrdenados.slice(0, 8).map((dl) => (
+                          <div key={dl.id} onClick={() => { setActiveTab('prazos'); setSelectedDeadline(dl); }}
+                            className="card-item" style={{ borderLeft: `4px solid ${dl._status.cor}` }}>
+                            <div className="card-top">
+                              <strong>{dl.numeroPJE || dl.numeroSEI}</strong>
+                              <span className={`badge ${dl._status.vencido ? 'status-indeferido' : dl._status.urgente ? 'status-diligencia' : 'status-pendente'}`}>{dl._status.label}</span>
+                            </div>
+                            {dl.objeto && <p className="card-text">{dl.objeto.substring(0, 100)}</p>}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+
+                  {dashboardConfig.showAcompanhamentos && tabVisible('acompanhamentos') && (
+                    <div className="dashboard-widget">
+                      <h4><i className="ti ti-map-pin"></i> Acompanhamentos com movimentação recente</h4>
+                      <p className="push-config-desc" style={{marginBottom:'10px'}}>Últimos {dashboardConfig.diasAcompanhamento} dias</p>
+                      {acompanhamentosMovimentados.length === 0 ? (
+                        <p className="dashboard-empty">Nenhuma movimentação nos últimos {dashboardConfig.diasAcompanhamento} dias.</p>
+                      ) : (
+                        acompanhamentosMovimentados.slice(0, 8).map((acc) => (
+                          <div key={acc.id} onClick={() => { setActiveTab('acompanhamentos'); setSelectedAccompaniment(acc); setAccompEdits({}); }} className="card-item">
+                            <div className="card-top">
+                              <strong>{acc.numeroProcesso}</strong>
+                              <span className="badge status-pendente">{new Date(acc.dataUltimaEdicao).toLocaleDateString('pt-BR')}</span>
+                            </div>
+                            <p className="card-text"><strong>Setor Atual:</strong> {acc.setorAtual || '—'}</p>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+
+                  {dashboardConfig.showAudiencias && tabVisible('audiencias') && (
+                    <div className="dashboard-widget">
+                      <h4><i className="ti ti-calendar-event"></i> Audiências desta semana</h4>
+                      {audienciasSemana.length === 0 ? (
+                        <p className="dashboard-empty">Nenhuma audiência nos próximos 7 dias.</p>
+                      ) : (
+                        audienciasSemana.map((h) => (
+                          <div key={h.id} onClick={() => { setActiveTab('audiencias'); setSelectedHearing(h); }} className="card-item">
+                            <div className="card-top">
+                              <strong>{h.seiNumber}</strong>
+                              <span className="badge">{new Date(h.data).toLocaleDateString('pt-BR')} {h.hora}</span>
+                            </div>
+                            {h.objeto && <p className="card-text">{h.objeto.substring(0, 100)}</p>}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
             {activeTab === 'despacho-gab' && (
               <>
                 {newProcessMode ? (
@@ -1839,16 +1970,13 @@ export default function SistemaDespacho() {
                     </div>
                     {deadlines.length === 0 ? (<p className="empty-state">Nenhum prazo cadastrado</p>) : (
                       [...deadlines].sort((a, b) => new Date(a.prazoFatal) - new Date(b.prazoFatal)).map(dl => {
-                        const daysLeft = Math.ceil((new Date(dl.prazoFatal + 'T23:59:59') - new Date()) / (1000 * 60 * 60 * 24));
-                        const vencido = daysLeft < 0;
-                        const urgente = !vencido && daysLeft <= 3;
-                        const alerta = !vencido && daysLeft <= 7;
+                        const { vencido, urgente, cor, label } = prazoStatus(dl.prazoFatal);
                         return (
-                          <div key={dl.id} onClick={() => setSelectedDeadline(dl)} className="card-item" style={{ borderLeft: `4px solid ${vencido ? 'var(--accent-red)' : urgente ? '#e85d04' : alerta ? '#f48c06' : 'var(--primary-main)'}` }}>
+                          <div key={dl.id} onClick={() => setSelectedDeadline(dl)} className="card-item" style={{ borderLeft: `4px solid ${cor}` }}>
                             <div className="card-top">
                               <strong>{dl.numeroPJE || dl.numeroSEI}</strong>
                               <span className={`badge ${vencido ? 'status-indeferido' : urgente ? 'status-diligencia' : 'status-pendente'}`}>
-                                {vencido ? 'VENCIDO' : daysLeft === 0 ? 'HOJE!' : `${daysLeft} dia(s)`}
+                                {label}
                               </span>
                             </div>
                             {dl.objeto && <p className="card-text"><strong>Objeto:</strong> {dl.objeto.substring(0, 120)}</p>}
@@ -1936,6 +2064,66 @@ export default function SistemaDespacho() {
               {currentUser === 'master' && (
                 <div className="settings-section">
                   <h4>🛠️ Administração</h4>
+
+                  {/* Personalizar o Painel (dashboard) inicial */}
+                  <button
+                    className={`settings-accordion-btn ${settingsPanel === 'dashboard' ? 'open' : ''}`}
+                    onClick={() => setSettingsPanel(settingsPanel === 'dashboard' ? null : 'dashboard')}
+                  >
+                    <span><i className="ti ti-layout-dashboard" style={{marginRight:'8px'}}></i>Personalizar Painel</span>
+                    <i className={`ti ${settingsPanel === 'dashboard' ? 'ti-chevron-up' : 'ti-chevron-down'}`}></i>
+                  </button>
+                  {settingsPanel === 'dashboard' && (
+                    <div className="settings-accordion-body">
+                      <p style={{fontSize:'12px', color:'var(--text-secondary)', marginBottom:'1rem', lineHeight:'1.5'}}>
+                        Escolha o que aparece no Painel inicial (aba "Painel") para todos os usuários.
+                      </p>
+                      <div className="push-config-block">
+                        <div className="push-config-title"><strong>Informações exibidas</strong></div>
+                        <div className="push-config-users">
+                          {[
+                            { key: 'showPendentes', label: 'Despachos Pendentes' },
+                            { key: 'showPrazos', label: 'Prazos Vencendo' },
+                            { key: 'showAudiencias', label: 'Audiências da Semana' },
+                            { key: 'showAcompanhamentos', label: 'Acompanhamentos Movimentados' },
+                          ].map(({ key, label }) => {
+                            const checked = dashboardConfig[key] !== false;
+                            const toggle = async () => {
+                              const updated = { ...dashboardConfig, [key]: !checked };
+                              setDashboardConfig(updated);
+                              await saveConfig({ dashboardConfig: updated });
+                            };
+                            return (
+                              <label key={key} className={`push-user-chip ${checked ? 'active' : ''}`}>
+                                <input type="checkbox" checked={checked} onChange={toggle} style={{display:'none'}} />
+                                {label}
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      <div className="push-config-block">
+                        <div className="push-config-title"><strong>Acompanhamentos: mostrar movimentações dos últimos</strong></div>
+                        <div style={{display:'flex', alignItems:'center', gap:'8px'}}>
+                          <input type="number" min="1" max="90" value={dashboardConfig.diasAcompanhamento}
+                            style={{width:'80px'}}
+                            onChange={(e) => setDashboardConfig({ ...dashboardConfig, diasAcompanhamento: Number(e.target.value) || 1 })}
+                            onBlur={async () => await saveConfig({ dashboardConfig })} />
+                          <span style={{fontSize:'13px', color:'var(--text-secondary)'}}>dias (informação instantânea — ajuste como preferir)</span>
+                        </div>
+                      </div>
+                      <div className="push-config-block">
+                        <div className="push-config-title"><strong>Prazos: avisar com quantos dias de antecedência</strong></div>
+                        <div style={{display:'flex', alignItems:'center', gap:'8px'}}>
+                          <input type="number" min="1" max="90" value={dashboardConfig.diasPrazoAlerta}
+                            style={{width:'80px'}}
+                            onChange={(e) => setDashboardConfig({ ...dashboardConfig, diasPrazoAlerta: Number(e.target.value) || 1 })}
+                            onBlur={async () => await saveConfig({ dashboardConfig })} />
+                          <span style={{fontSize:'13px', color:'var(--text-secondary)'}}>dias</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Configuração de Funcionalidades (visibilidade das abas) */}
                   <button
