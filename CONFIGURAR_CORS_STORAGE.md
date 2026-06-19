@@ -1,51 +1,52 @@
-# Configurar CORS no Firebase Storage (necessário para upload de PDF)
+# Ativar o Firebase Storage (necessário para o upload de PDF)
 
-O upload de PDF é bloqueado pelo navegador com erro de **CORS** enquanto o bucket
-do Storage não tiver uma política de CORS. Isso é configurado UMA única vez no
-bucket do Google Cloud Storage (não nas `storage.rules`).
+## Causa do erro
 
-Bucket deste projeto: `gs://asstec---semarh.firebasestorage.app`
+O upload de PDF falha porque **o Firebase Storage ainda não foi ativado** neste
+projeto — o "balde" (bucket) onde os arquivos ficam não existe, então o envio
+retorna **404** (e o navegador mostra isso como erro de CORS).
 
-## Passo a passo (sem instalar nada — Google Cloud Shell)
+> Não é preciso configurar CORS manualmente: o endpoint do Firebase já devolve
+> os cabeçalhos de CORS corretos. Basta o bucket existir.
 
-1. Acesse: https://console.cloud.google.com/  → selecione o projeto **asstec---semarh**.
-2. Clique no ícone de terminal **"Ativar o Cloud Shell"** (canto superior direito).
-3. No terminal que abrir, crie o arquivo de CORS colando:
+## O que fazer (só cliques, ~2 minutos)
 
-   ```bash
-   cat > cors.json <<'JSON'
-   [
-     {
-       "origin": ["*"],
-       "method": ["GET", "HEAD", "PUT", "POST", "DELETE", "OPTIONS"],
-       "responseHeader": ["Content-Type", "Authorization", "Content-Length", "User-Agent", "x-goog-resumable", "x-goog-meta-*"],
-       "maxAgeSeconds": 3600
+1. Acesse https://console.firebase.google.com/ e entre no projeto **asstec---semarh**.
+2. No menu da esquerda, em **Criação/Build**, clique em **Storage**.
+3. Clique em **Começar / Get started**.
+4. Na janela:
+   - **Regras de segurança**: escolha **"Iniciar no modo de teste"** (start in test mode) e avance.
+   - **Local (location)**: deixe o sugerido (ex.: `southamerica-east1` ou `us-central`) e confirme. (Esse local não pode ser mudado depois — qualquer um serve.)
+5. Aguarde criar. Vai aparecer o nome do bucket no topo, algo como
+   **`gs://asstec---semarh.firebasestorage.app`**.
+
+   👉 **Anote esse nome e me envie.** Preciso conferir se bate com o que está no
+   app. Se for diferente (por ex. terminar em `.appspot.com`), eu ajusto o código.
+
+6. Ainda em **Storage → aba Regras (Rules)**, confirme que está assim e clique em **Publicar**:
+
+   ```
+   rules_version = '2';
+   service firebase.storage {
+     match /b/{bucket}/o {
+       match /{allPaths=**} {
+         allow read, write: if true;
+       }
      }
-   ]
-   JSON
+   }
    ```
+   (O "modo de teste" expira em 30 dias; essas regras acima não expiram.)
 
-4. Aplique no bucket:
+7. Volte ao app, recarregue com **Ctrl + Shift + R** e tente enviar o PDF de novo.
 
-   ```bash
-   gcloud storage buckets update gs://asstec---semarh.firebasestorage.app --cors-file=cors.json
-   ```
+---
 
-   (Alternativa, se o comando acima não existir na sua versão:)
+## (Só se AINDA der erro de CORS depois disso)
 
-   ```bash
-   gsutil cors set cors.json gs://asstec---semarh.firebasestorage.app
-   ```
+Aí sim aplique a política de CORS via Google Cloud Shell. Veja `cors.json` na raiz
+e rode no Cloud Shell (https://console.cloud.google.com/ → ícone do terminal):
 
-5. Conferir se aplicou:
-
-   ```bash
-   gcloud storage buckets describe gs://asstec---semarh.firebasestorage.app --format="default(cors_config)"
-   ```
-
-6. Volte ao app, recarregue com **Ctrl+Shift+R** e tente o upload de novo.
-
-> Observação de segurança: `"origin": ["*"]` libera o upload a partir de qualquer
-> site. Para restringir, troque por algo como
-> `["https://SEU-DOMINIO.vercel.app", "http://localhost:3000"]`.
-> O controle de QUEM pode gravar continua nas `storage.rules`.
+```bash
+gcloud storage buckets update gs://SEU-BUCKET --cors-file=cors.json
+```
+Troque `SEU-BUCKET` pelo nome anotado no passo 5.
