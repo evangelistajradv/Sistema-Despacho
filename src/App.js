@@ -36,6 +36,11 @@ export default function SistemaDespacho() {
   const [userEmails, setUserEmails] = useState({}); // { role: email } — e-mail real cadastrado por cada pessoa
   const [emailRegistered, setEmailRegistered] = useState({}); // { role: true } — já completou o cadastro do e-mail
   const [forceReRegister, setForceReRegister] = useState({}); // { role: true } — master autorizou recadastro sem senha atual
+  const [customUsers, setCustomUsers] = useState({}); // { role: { nome, criadoEm } } — usuários criados pelo master (também usado para renomear os 5 originais)
+  const [newUserName, setNewUserName] = useState('');
+  // Todos os usuários do sistema: os 5 originais + os criados pelo master.
+  // customUsers por último para também permitir renomear um usuário original.
+  const ALL_USERS = { ...USUARIOS, ...customUsers };
   const [regEmail, setRegEmail] = useState('');
   const [regCurrentPass, setRegCurrentPass] = useState('');
   const [regNewPass, setRegNewPass] = useState('');
@@ -131,10 +136,11 @@ export default function SistemaDespacho() {
   // Permissões configuráveis pelo master (leitura/criação/edição/exclusão).
   // O default vem das permissões fixas em USUARIOS.
   const PERMISSION_ACTIONS = [
-    { key: 'ver',     label: 'Leitura' },
-    { key: 'criar',   label: 'Criação' },
-    { key: 'editar',  label: 'Edição' },
-    { key: 'deletar', label: 'Exclusão' },
+    { key: 'ver',       label: 'Leitura' },
+    { key: 'criar',     label: 'Criação' },
+    { key: 'editar',    label: 'Edição' },
+    { key: 'deletar',   label: 'Exclusão' },
+    { key: 'despachar', label: 'Despachar' },
   ];
   const DEFAULT_USER_PERMISSIONS = Object.keys(USUARIOS).reduce((acc, role) => {
     acc[role] = PERMISSION_ACTIONS.reduce((p, a) => {
@@ -282,8 +288,8 @@ export default function SistemaDespacho() {
   // automaticamente. Só decide depois que a config (e-mails) já carregou.
   useEffect(() => {
     if (!restoredUser || authenticated || !configLoaded) return;
-    const role = Object.keys(USUARIOS).find((r) => userEmails[r] === restoredUser.email)
-      || Object.keys(USUARIOS).find((r) => roleEmail(r) === restoredUser.email);
+    const role = Object.keys(ALL_USERS).find((r) => userEmails[r] === restoredUser.email)
+      || Object.keys(ALL_USERS).find((r) => roleEmail(r) === restoredUser.email);
     if (role) finishLogin(role);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restoredUser, configLoaded, userEmails, authenticated]);
@@ -325,6 +331,7 @@ export default function SistemaDespacho() {
             if (data.userEmails) setUserEmails(data.userEmails);
             if (data.emailRegistered) setEmailRegistered(data.emailRegistered);
             if (data.forceReRegister) setForceReRegister(data.forceReRegister);
+            if (data.customUsers) setCustomUsers(data.customUsers);
           } else {
             console.log('ℹ️ Config ainda não existe no Firebase - será criada ao salvar');
           }
@@ -378,7 +385,7 @@ export default function SistemaDespacho() {
     try {
       const payload = {
         doeEmails, accompEmails, userPasswords, pushNotifConfig, tabVisibility, userPermissions,
-        userEmails, emailRegistered, forceReRegister,
+        userEmails, emailRegistered, forceReRegister, customUsers,
         ...overrides,
       };
       console.log('💾 Salvando config no Firebase:', payload);
@@ -401,7 +408,7 @@ export default function SistemaDespacho() {
   const handleLogin = async (e) => {
     e.preventDefault();
     const role = loginUser;
-    if (!USUARIOS[role]) { alert('Usuário inválido'); return; }
+    if (!ALL_USERS[role]) { alert('Usuário inválido'); return; }
     if (!loginPass) { alert('Digite sua senha'); return; }
     const email = userEmails[role];
     if (!email) { alert('Cadastre seu e-mail primeiro.'); return; }
@@ -498,14 +505,14 @@ export default function SistemaDespacho() {
       if (isRegistration) {
         const existingRole = Object.keys(userEmails).find((r) => userEmails[r] === googleEmail);
         if (existingRole && existingRole !== role) {
-          setRegError(`Essa conta Google já está vinculada a ${USUARIOS[existingRole]?.nome}.`);
+          setRegError(`Essa conta Google já está vinculada a ${ALL_USERS[existingRole]?.nome}.`);
           await signOut(auth);
           return;
         }
         setRegCurrentPass('');
         await finishRegistration(role, googleEmail);
       } else {
-        const matchedRole = Object.keys(USUARIOS).find((r) => userEmails[r] === googleEmail);
+        const matchedRole = Object.keys(ALL_USERS).find((r) => userEmails[r] === googleEmail);
         if (matchedRole) {
           finishLogin(matchedRole);
         } else {
@@ -546,12 +553,57 @@ export default function SistemaDespacho() {
   };
 
   const forceRoleReRegister = async (role) => {
-    if (!window.confirm(`Forçar ${USUARIOS[role]?.nome} a cadastrar um novo e-mail e senha no próximo login, sem precisar da senha atual?`)) return;
+    if (!window.confirm(`Forçar ${ALL_USERS[role]?.nome} a cadastrar um novo e-mail e senha no próximo login, sem precisar da senha atual?`)) return;
     const newRegistered = { ...emailRegistered, [role]: false };
     const newForce = { ...forceReRegister, [role]: true };
     setEmailRegistered(newRegistered); setForceReRegister(newForce);
     await saveConfig({ emailRegistered: newRegistered, forceReRegister: newForce });
-    alert(`Pronto. No próximo login, ${USUARIOS[role]?.nome} vai cadastrar um e-mail e senha novos.`);
+    alert(`Pronto. No próximo login, ${ALL_USERS[role]?.nome} vai cadastrar um e-mail e senha novos.`);
+  };
+
+  // ─── Criar / renomear / remover usuários (master) ───────────────────────────
+  const slugify = (s) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+
+  const createUser = async () => {
+    const nome = newUserName.trim();
+    if (!nome) { alert('Digite o nome do novo usuário'); return; }
+    const base = slugify(nome) || 'usuario';
+    let key = base, n = 2;
+    while (ALL_USERS[key]) { key = `${base}_${n}`; n++; }
+
+    const newCustom = { ...customUsers, [key]: { nome, role: key, criadoEm: new Date().toISOString() } };
+    // Permissões básicas de início (leitura liberada; o resto o master ajusta no painel de Permissões)
+    const newPerms = { ...userPermissions, [key]: { ver: true, criar: false, editar: false, deletar: false, despachar: false } };
+    setCustomUsers(newCustom); setUserPermissions(newPerms);
+    await saveConfig({ customUsers: newCustom, userPermissions: newPerms });
+    setNewUserName('');
+    alert(`Usuário "${nome}" criado! No primeiro login, essa pessoa vai cadastrar e-mail e senha (ou entrar com Google).`);
+  };
+
+  const renameUser = async (role) => {
+    const atual = ALL_USERS[role]?.nome || '';
+    const novo = window.prompt('Novo nome de exibição:', atual);
+    if (!novo || !novo.trim() || novo.trim() === atual) return;
+    const newCustom = { ...customUsers, [role]: { ...(customUsers[role] || { role }), nome: novo.trim() } };
+    setCustomUsers(newCustom);
+    await saveConfig({ customUsers: newCustom });
+  };
+
+  const deleteCustomUser = async (role) => {
+    if (USUARIOS[role]) { alert('Não é possível remover um dos usuários originais do sistema.'); return; }
+    if (!window.confirm(`Remover o usuário "${ALL_USERS[role]?.nome}"? Essa pessoa não vai mais conseguir entrar no sistema.`)) return;
+    const newCustom = { ...customUsers }; delete newCustom[role];
+    const newEmails = { ...userEmails }; delete newEmails[role];
+    const newRegistered = { ...emailRegistered }; delete newRegistered[role];
+    const newForce = { ...forceReRegister }; delete newForce[role];
+    const newPerms = { ...userPermissions }; delete newPerms[role];
+    const newPasswords = { ...userPasswords }; delete newPasswords[role];
+    setCustomUsers(newCustom); setUserEmails(newEmails); setEmailRegistered(newRegistered);
+    setForceReRegister(newForce); setUserPermissions(newPerms); setUserPasswords(newPasswords);
+    await saveConfig({
+      customUsers: newCustom, userEmails: newEmails, emailRegistered: newRegistered,
+      forceReRegister: newForce, userPermissions: newPerms, userPasswords: newPasswords,
+    });
   };
 
   // Navegação a partir do clique em notificação push (service worker envia mensagem)
@@ -604,7 +656,7 @@ export default function SistemaDespacho() {
     if (!currentUser) return false;
     if (currentUser === 'master') return true; // master tem acesso total
     // ações configuráveis pelo master (leitura/criação/edição/exclusão)
-    const configurable = ['ver', 'criar', 'editar', 'deletar'];
+    const configurable = ['ver', 'criar', 'editar', 'deletar', 'despachar'];
     if (configurable.includes(action)) {
       const cfg = userPermissions[currentUser];
       if (cfg && typeof cfg[action] === 'boolean') return cfg[action];
@@ -1181,11 +1233,9 @@ export default function SistemaDespacho() {
             <div className="form-group">
               <label htmlFor="usuario-reg">Usuário</label>
               <select id="usuario-reg" value={loginUser} onChange={(e) => setLoginUser(e.target.value)} className="login-input">
-                <option value="master">Master</option>
-                <option value="secretario">{USUARIOS.secretario.nome}</option>
-                <option value="chefe_gab">{USUARIOS.chefe_gab.nome}</option>
-                <option value="servidora">{USUARIOS.servidora.nome}</option>
-                <option value="estagiaria">{USUARIOS.estagiaria.nome}</option>
+                {Object.entries(ALL_USERS).map(([role, info]) => (
+                  <option key={role} value={role}>{role === 'master' ? 'Master' : info.nome}</option>
+                ))}
               </select>
             </div>
             {!forceReRegister[loginUser] && (
@@ -1231,11 +1281,9 @@ export default function SistemaDespacho() {
           <div className="form-group">
             <label htmlFor="usuario">Usuário</label>
             <select id="usuario" value={loginUser} onChange={(e) => { setLoginUser(e.target.value); setForgotMsg(''); }} className="login-input">
-              <option value="master">Master</option>
-              <option value="secretario">{USUARIOS.secretario.nome}</option>
-              <option value="chefe_gab">{USUARIOS.chefe_gab.nome}</option>
-              <option value="servidora">{USUARIOS.servidora.nome}</option>
-              <option value="estagiaria">{USUARIOS.estagiaria.nome}</option>
+              {Object.entries(ALL_USERS).map(([role, info]) => (
+                <option key={role} value={role}>{role === 'master' ? 'Master' : info.nome}</option>
+              ))}
             </select>
           </div>
           <div className="form-group">
@@ -1280,11 +1328,11 @@ export default function SistemaDespacho() {
         </nav>
         <div className="sidebar-footer">
           <div className="user-info">
-            <p className="user-name">{USUARIOS[currentUser]?.nome}</p>
-            <p className="user-role">{USUARIOS[currentUser]?.role}</p>
+            <p className="user-name">{ALL_USERS[currentUser]?.nome}</p>
+            <p className="user-role">{ALL_USERS[currentUser]?.role}</p>
           </div>
           <div className="sidebar-actions">
-            <NotificationCenter currentUser={currentUser} USUARIOS={USUARIOS} />
+            <NotificationCenter currentUser={currentUser} USUARIOS={ALL_USERS} />
             <button className="btn-icon" onClick={() => setShowSettings(!showSettings)} title="Configurações"><i className="ti ti-settings"></i></button>
             <button className="btn-icon" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title="Alternar tema"><i className={`ti ${theme === 'light' ? 'ti-moon' : 'ti-sun'}`}></i></button>
             <button className="btn-icon btn-logout" onClick={handleLogout} title="Sair"><i className="ti ti-logout"></i></button>
@@ -1881,8 +1929,8 @@ export default function SistemaDespacho() {
               <div className="settings-section">
                 <h4>👤 Informações da Conta</h4>
                 <div className="info-line"><span>Usuário:</span><strong>{currentUser}</strong></div>
-                <div className="info-line"><span>Nome:</span><strong>{USUARIOS[currentUser]?.nome}</strong></div>
-                <div className="info-line"><span>Função:</span><strong>{USUARIOS[currentUser]?.role}</strong></div>
+                <div className="info-line"><span>Nome:</span><strong>{ALL_USERS[currentUser]?.nome}</strong></div>
+                <div className="info-line"><span>Função:</span><strong>{ALL_USERS[currentUser]?.role}</strong></div>
               </div>
 
               {currentUser === 'master' && (
@@ -1908,7 +1956,7 @@ export default function SistemaDespacho() {
                             <strong><i className={`ti ${tab.icon}`} style={{marginRight:'6px'}}></i>{tab.label}</strong>
                           </div>
                           <div className="push-config-users">
-                            {Object.entries(USUARIOS).map(([role, info]) => {
+                            {Object.entries(ALL_USERS).map(([role, info]) => {
                               if (role === 'master') return null; // master sempre vê tudo
                               const checked = tabVisibility[tab.id]?.[role] !== false;
                               const toggle = async () => {
@@ -1958,7 +2006,7 @@ export default function SistemaDespacho() {
                             <span className="push-config-desc">{desc}</span>
                           </div>
                           <div className="push-config-users">
-                            {Object.entries(USUARIOS).map(([role, info]) => {
+                            {Object.entries(ALL_USERS).map(([role, info]) => {
                               const checked = pushNotifConfig[key]?.[role] || false;
                               const toggle = async () => {
                                 const updated = {
@@ -1992,9 +2040,9 @@ export default function SistemaDespacho() {
                   {settingsPanel === 'permissions' && (
                     <div className="settings-accordion-body">
                       <p style={{fontSize:'12px', color:'var(--text-secondary)', marginBottom:'1rem', lineHeight:'1.5'}}>
-                        Defina o que cada usuário pode fazer: <strong>leitura</strong>, <strong>criação</strong>, <strong>edição</strong> e <strong>exclusão</strong>. O master tem sempre acesso total.
+                        Defina o que cada usuário pode fazer: <strong>leitura</strong>, <strong>criação</strong>, <strong>edição</strong>, <strong>exclusão</strong> e <strong>despachar</strong>. O master tem sempre acesso total.
                       </p>
-                      {Object.entries(USUARIOS).map(([role, info]) => {
+                      {Object.entries(ALL_USERS).map(([role, info]) => {
                         if (role === 'master') return null; // master tem acesso total
                         return (
                           <div key={role} className="push-config-block">
@@ -2026,21 +2074,35 @@ export default function SistemaDespacho() {
                     </div>
                   )}
 
-                  {/* Credenciais (e-mail e senha) de cada usuário */}
+                  {/* Gerenciar Usuários: criar novos, renomear, credenciais (e-mail/senha) */}
                   <button
                     className={`settings-accordion-btn ${settingsPanel === 'credentials' ? 'open' : ''}`}
                     onClick={() => setSettingsPanel(settingsPanel === 'credentials' ? null : 'credentials')}
                   >
-                    <span><i className="ti ti-key" style={{marginRight:'8px'}}></i>Credenciais dos Usuários</span>
+                    <span><i className="ti ti-users" style={{marginRight:'8px'}}></i>Gerenciar Usuários</span>
                     <i className={`ti ${settingsPanel === 'credentials' ? 'ti-chevron-up' : 'ti-chevron-down'}`}></i>
                   </button>
                   {settingsPanel === 'credentials' && (
                     <div className="settings-accordion-body">
                       <p style={{fontSize:'12px', color:'var(--text-secondary)', marginBottom:'1rem', lineHeight:'1.5'}}>
-                        Envie um link de redefinição de senha para o e-mail já cadastrado, ou force um novo cadastro
-                        (a pessoa define um e-mail e uma senha novos no próximo login, sem precisar da senha atual).
+                        Crie novos usuários, renomeie os existentes, envie redefinição de senha ou force um novo
+                        cadastro de e-mail/senha. Usuários novos já aparecem automaticamente nos painéis de
+                        Funcionalidades, Notificações e Permissões acima — configure o acesso deles ali.
                       </p>
-                      {Object.entries(USUARIOS).map(([role, info]) => (
+
+                      <div className="push-config-block" style={{marginBottom:'1.2rem'}}>
+                        <div className="push-config-title"><strong><i className="ti ti-user-plus" style={{marginRight:'6px'}}></i>Criar novo usuário</strong></div>
+                        <div style={{display:'flex', gap:'8px', flexWrap:'wrap', alignItems:'flex-start'}}>
+                          <div className="form-group" style={{flex:'1', minWidth:'180px', marginBottom:0}}>
+                            <input type="text" value={newUserName} onChange={(e) => setNewUserName(e.target.value)}
+                              placeholder="Nome completo da pessoa"
+                              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); createUser(); } }} />
+                          </div>
+                          <button type="button" className="btn-primary" style={{width:'auto'}} onClick={createUser}>Criar</button>
+                        </div>
+                      </div>
+
+                      {Object.entries(ALL_USERS).map(([role, info]) => (
                         <div key={role} className="push-config-block">
                           <div className="push-config-title">
                             <strong><i className="ti ti-user" style={{marginRight:'6px'}}></i>{info.nome}</strong>
@@ -2049,6 +2111,9 @@ export default function SistemaDespacho() {
                             </span>
                           </div>
                           <div className="push-config-users">
+                            <button type="button" className="link-btn" onClick={() => renameUser(role)}>
+                              <i className="ti ti-edit"></i> Renomear
+                            </button>
                             <button type="button" className="link-btn" disabled={!userEmails[role]}
                               onClick={() => sendResetTo(role)}>
                               <i className="ti ti-mail"></i> Enviar redefinição de senha
@@ -2056,6 +2121,11 @@ export default function SistemaDespacho() {
                             <button type="button" className="link-btn" onClick={() => forceRoleReRegister(role)}>
                               <i className="ti ti-refresh"></i> Forçar novo cadastro
                             </button>
+                            {!USUARIOS[role] && (
+                              <button type="button" className="link-btn" onClick={() => deleteCustomUser(role)}>
+                                <i className="ti ti-trash"></i> Remover usuário
+                              </button>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -2072,8 +2142,8 @@ export default function SistemaDespacho() {
 
       {/* Barra de ações fixa no rodapé — visível apenas no mobile */}
       <div className="mobile-bottom-bar">
-        <span className="mobile-user-label">{USUARIOS[currentUser]?.nome}</span>
-        <NotificationCenter currentUser={currentUser} USUARIOS={USUARIOS} />
+        <span className="mobile-user-label">{ALL_USERS[currentUser]?.nome}</span>
+        <NotificationCenter currentUser={currentUser} USUARIOS={ALL_USERS} />
         <button className="btn-icon" onClick={() => setShowSettings(!showSettings)} title="Configurações"><i className="ti ti-settings"></i></button>
         <button className="btn-icon" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title="Tema"><i className={`ti ${theme === 'light' ? 'ti-moon' : 'ti-sun'}`}></i></button>
         <button className="btn-icon btn-logout" onClick={handleLogout} title="Sair"><i className="ti ti-logout"></i></button>
