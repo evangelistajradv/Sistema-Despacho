@@ -64,6 +64,9 @@ export default function SistemaDespacho() {
   const [newHearing, setNewHearing] = useState({ seiNumber: '', data: '', hora: '', objeto: '', linkSessao: '', setorResponsavel: '', servidoresDesignados: '', emailsNotificacao: '' });
   const [newDoe, setNewDoe] = useState({ dataPublicacao: '', dataDisponibilizacao: '', numeroDiario: '', conteudo: '' });
   const [uploadingDoc, setUploadingDoc] = useState(false);
+  const [newDocLink, setNewDocLink] = useState({ url: '', nome: '' });
+  const [showAddDocModal, setShowAddDocModal] = useState(false);
+  const [linkTarget, setLinkTarget] = useState(null); // { collectionName, entity, setEntity }
   const [showObservationsModal, setShowObservationsModal] = useState(false);
   const [observationText, setObservationText] = useState('');
   const [hearingViewMode, setHearingViewMode] = useState('list');
@@ -776,16 +779,32 @@ export default function SistemaDespacho() {
     }
   };
 
-  // Bloco reutilizável de anexos em PDF (processos / acompanhamentos)
-  const renderAttachments = (collectionName, entity, setEntity) => (
+  // Adiciona um link de documento (Google Drive, OneDrive, etc.) ao campo `documentos`
+  const addDocLink = async () => {
+    if (!linkTarget) return;
+    const { collectionName, entity, setEntity } = linkTarget;
+    const url = newDocLink.url.trim();
+    const nome = newDocLink.nome.trim() || url;
+    if (!url) { alert('Cole o link do documento'); return; }
+    const docs = [...(entity.documentos || []), { url, nome, tipo: 'link', adicionadoEm: new Date().toISOString() }];
+    await updateDoc(doc(db, collectionName, entity.id), { documentos: docs });
+    setEntity((prev) => ({ ...prev, documentos: docs }));
+    setNewDocLink({ url: '', nome: '' });
+    setShowAddDocModal(false);
+    setLinkTarget(null);
+  };
+
+  // Bloco reutilizável de anexos (processos / acompanhamentos).
+  // allowLink = true também permite anexar um link, além de enviar PDF.
+  const renderAttachments = (collectionName, entity, setEntity, allowLink = false) => (
     <div className="info-box">
-      <label>📎 Documentos Anexados (PDF)</label>
+      <label>📎 Documentos Anexados</label>
       <div className="attachments">
         {(entity.documentos || []).length > 0 ? (
           (entity.documentos || []).map((docItem, i) => (
             <div key={i} className="attachment-item">
               <a href={docItem.url} target="_blank" rel="noopener noreferrer" className="attachment-link">
-                <i className="ti ti-file-type-pdf"></i><span>{docItem.nome}</span>
+                <i className={`ti ${docItem.tipo === 'link' ? 'ti-link' : 'ti-file-type-pdf'}`}></i><span>{docItem.nome}</span>
               </a>
               {can('editar') && (
                 <button type="button" className="attachment-remove" title="Remover"
@@ -797,11 +816,19 @@ export default function SistemaDespacho() {
           <p className="attachment-empty">Nenhum documento anexado</p>
         )}
         {can('editar') && (
-          <label className={`upload-btn ${uploadingDoc ? 'disabled' : ''}`}>
-            <i className="ti ti-upload"></i> {uploadingDoc ? 'Enviando...' : 'Enviar PDF'}
-            <input type="file" accept="application/pdf" disabled={uploadingDoc}
-              onChange={(e) => handleUploadDoc(e, collectionName, entity, setEntity)} style={{ display: 'none' }} />
-          </label>
+          <div className="attachment-actions">
+            <label className={`upload-btn ${uploadingDoc ? 'disabled' : ''}`}>
+              <i className="ti ti-upload"></i> {uploadingDoc ? 'Enviando...' : 'Enviar PDF'}
+              <input type="file" accept="application/pdf" disabled={uploadingDoc}
+                onChange={(e) => handleUploadDoc(e, collectionName, entity, setEntity)} style={{ display: 'none' }} />
+            </label>
+            {allowLink && (
+              <button type="button" className="link-btn"
+                onClick={() => { setLinkTarget({ collectionName, entity, setEntity }); setNewDocLink({ url: '', nome: '' }); setShowAddDocModal(true); }}>
+                <i className="ti ti-link"></i> Adicionar link
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>
@@ -1070,7 +1097,7 @@ export default function SistemaDespacho() {
                         <p style={{whiteSpace: 'pre-wrap'}}>{selectedProcess.observacoes}</p>
                       </div>
                     )}
-                    {renderAttachments('processos', selectedProcess, setSelectedProcess)}
+                    {renderAttachments('processos', selectedProcess, setSelectedProcess, true)}
                     {can('despachar') && !selectedProcess.despachado && (
                       <div className="action-buttons">
                         <button className="btn-approve" onClick={() => handleDispatch('prosseguimento')}>✓ Prosseguimento</button>
@@ -1557,6 +1584,27 @@ export default function SistemaDespacho() {
           </div>
         </main>
       </div>
+
+      {showAddDocModal && (
+        <div className="modal-overlay">
+          <div className="modal-box">
+            <h4>📎 Adicionar link de documento</h4>
+            <p style={{fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '12px'}}>Cole o link de compartilhamento do Google Drive, OneDrive, SEI ou outro serviço.</p>
+            <div className="form-group">
+              <label>Nome do documento</label>
+              <input type="text" value={newDocLink.nome} onChange={(e) => setNewDocLink(prev => ({...prev, nome: e.target.value}))} placeholder="Ex: Parecer Jurídico nº 001/2024" />
+            </div>
+            <div className="form-group">
+              <label>Link do documento *</label>
+              <input type="url" value={newDocLink.url} onChange={(e) => setNewDocLink(prev => ({...prev, url: e.target.value}))} placeholder="https://drive.google.com/..." />
+            </div>
+            <div className="modal-actions">
+              <button className="btn-primary" onClick={addDocLink}>Salvar</button>
+              <button className="btn-secondary" onClick={() => { setShowAddDocModal(false); setNewDocLink({ url: '', nome: '' }); setLinkTarget(null); }}>Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showSettings && (
         <div className="modal-overlay">
