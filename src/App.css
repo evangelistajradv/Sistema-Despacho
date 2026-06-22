@@ -1348,13 +1348,6 @@ h1, h2, h3, .logo-text h2 {
   box-shadow: 0 6px 16px rgba(5, 150, 105, 0.3);
 }
 
-.verify-done {
-  font-size: 13px;
-  color: var(--accent-green);
-  font-weight: 700;
-  margin: 0;
-}
-
 /* ═══════════════════════════════════════════════════════════════ */
 /* ANEXOS / UPLOAD DE PDF                                          */
 /* ═══════════════════════════════════════════════════════════════ */

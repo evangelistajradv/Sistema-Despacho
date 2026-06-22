@@ -777,13 +777,27 @@ export default function SistemaDespacho() {
 
   const notifEnabled = (type) => pushNotifConfig[type]?.[currentUser] !== false;
 
-  const updateVerification = async (id) => {
+  // Marca a verificação como atualizada SEM alterar a data de última movimentação
+  // (essa só muda quando o conteúdo é editado, via updateAccompaniment) e sem
+  // disparar nenhuma notificação — nem sino, nem banner, nem push.
+  const markVerified = async (id) => {
     const hoje = new Date().toISOString().split('T')[0];
     await updateDoc(doc(db, 'acompanhamentos', id), { verificacaoAtualizada: true, dataUltimaVerificacao: hoje });
-    const newSelected = { ...selectedAccompaniment, verificacaoAtualizada: true, dataUltimaVerificacao: hoje };
-    setSelectedAccompaniment(newSelected);
-    // Apenas verificação (sem movimentação/edição de dados): NÃO dispara nenhuma
-    // notificação — nem sino, nem banner, nem push. (requisito 1)
+    return hoje;
+  };
+
+  const updateVerification = async (id) => {
+    const hoje = await markVerified(id);
+    setSelectedAccompaniment((prev) => (prev && prev.id === id ? { ...prev, verificacaoAtualizada: true, dataUltimaVerificacao: hoje } : prev));
+  };
+
+  // Verifica todos os acompanhamentos de uma vez (botão "Verificar todos os processos")
+  const verifyAllAccompaniments = async () => {
+    if (accompaniments.length === 0) { alert('Nenhum acompanhamento cadastrado.'); return; }
+    if (!window.confirm(`Marcar verificação atualizada para todos os ${accompaniments.length} acompanhamentos?`)) return;
+    await Promise.all(accompaniments.map((acc) => markVerified(acc.id)));
+    if (selectedAccompaniment) await updateVerification(selectedAccompaniment.id);
+    alert('Verificação atualizada para todos os processos.');
   };
 
   const deleteAccompaniment = async (id) => { await deleteDoc(doc(db, 'acompanhamentos', id)); setSelectedAccompaniment(null); };
@@ -1628,53 +1642,53 @@ export default function SistemaDespacho() {
                   </div>
                 ) : selectedAccompaniment ? (
                   <div className="detail-card">
-                    <button className="back-button" onClick={() => { setSelectedAccompaniment(null); setAccompEdits({}); }}>← Voltar</button>
+                    <button className="back-button" onClick={() => {
+                      if (Object.keys(accompEdits).length > 0 && !window.confirm('Há alterações não salvas. Sair sem salvar?')) return;
+                      setSelectedAccompaniment(null); setAccompEdits({});
+                    }}>← Voltar</button>
                     <div className="card-header"><h2>{selectedAccompaniment.numeroProcesso}</h2></div>
                     <div className="form-section">
-                      {/* onChange atualiza só o estado local; onBlur salva no Firebase */}
+                      {/* As edições ficam só no estado local até clicar em "Salvar Alterações" */}
                       <div className="form-group"><label>Objeto</label><textarea
                         value={accompEdits.objeto ?? selectedAccompaniment.objeto}
                         onChange={(e) => setAccompEdits((p) => ({ ...p, objeto: e.target.value }))}
-                        onBlur={() => accompEdits.objeto !== undefined && updateAccompaniment(selectedAccompaniment.id, { objeto: accompEdits.objeto })}
                       /></div>
                       <div className="form-grid">
                         <div className="form-group"><label>Setor Anterior</label><input type="text"
                           value={accompEdits.setorAnterior ?? selectedAccompaniment.setorAnterior}
                           onChange={(e) => setAccompEdits((p) => ({ ...p, setorAnterior: e.target.value }))}
-                          onBlur={() => accompEdits.setorAnterior !== undefined && updateAccompaniment(selectedAccompaniment.id, { setorAnterior: accompEdits.setorAnterior })}
                         /></div>
                         <div className="form-group"><label>Data</label><input type="date"
                           value={accompEdits.dataSetorAnterior ?? selectedAccompaniment.dataSetorAnterior}
-                          onChange={(e) => updateAccompaniment(selectedAccompaniment.id, { dataSetorAnterior: e.target.value })}
+                          onChange={(e) => setAccompEdits((p) => ({ ...p, dataSetorAnterior: e.target.value }))}
                         /></div>
                       </div>
                       <div className="form-grid">
                         <div className="form-group"><label>Setor Atual</label><input type="text"
                           value={accompEdits.setorAtual ?? selectedAccompaniment.setorAtual}
                           onChange={(e) => setAccompEdits((p) => ({ ...p, setorAtual: e.target.value }))}
-                          onBlur={() => accompEdits.setorAtual !== undefined && updateAccompaniment(selectedAccompaniment.id, { setorAtual: accompEdits.setorAtual })}
                         /></div>
                         <div className="form-group"><label>Data</label><input type="date"
                           value={accompEdits.dataSetorAtual ?? selectedAccompaniment.dataSetorAtual}
-                          onChange={(e) => updateAccompaniment(selectedAccompaniment.id, { dataSetorAtual: e.target.value })}
+                          onChange={(e) => setAccompEdits((p) => ({ ...p, dataSetorAtual: e.target.value }))}
                         /></div>
                       </div>
                       <div className="form-group"><label>Status</label><textarea
                         value={accompEdits.status ?? selectedAccompaniment.status}
                         onChange={(e) => setAccompEdits((p) => ({ ...p, status: e.target.value }))}
-                        onBlur={() => accompEdits.status !== undefined && updateAccompaniment(selectedAccompaniment.id, { status: accompEdits.status })}
                       /></div>
+                    </div>
+                    <div className="form-actions">
+                      <button className="btn-primary" disabled={Object.keys(accompEdits).length === 0}
+                        onClick={() => { updateAccompaniment(selectedAccompaniment.id, accompEdits); setAccompEdits({}); }}>
+                        💾 Salvar Alterações
+                      </button>
+                      <button className="btn-verify" onClick={() => updateVerification(selectedAccompaniment.id)}>✓ Atualizar Verificação</button>
                     </div>
                     {renderAttachments('acompanhamentos', selectedAccompaniment, setSelectedAccompaniment)}
                     <div className="footer-info">
                       <p>Última Movimentação: <strong>{selectedAccompaniment.dataUltimaEdicao || '—'}</strong></p>
-                      {selectedAccompaniment.dataUltimaVerificacao && (
-                        <p>Última Verificação: <strong>{selectedAccompaniment.dataUltimaVerificacao}</strong></p>
-                      )}
-                      {!selectedAccompaniment.verificacaoAtualizada && (
-                        <button className="btn-verify" onClick={() => updateVerification(selectedAccompaniment.id)}>✓ Verificação Atualizada</button>
-                      )}
-                      {selectedAccompaniment.verificacaoAtualizada && (<span className="verify-done">✓ Verificado</span>)}
+                      <p>Última Verificação: <strong>{selectedAccompaniment.dataUltimaVerificacao || '—'}</strong></p>
                       <button className="btn-delete" onClick={() => deleteAccompaniment(selectedAccompaniment.id)}>🗑️</button>
                     </div>
                   </div>
@@ -1684,6 +1698,7 @@ export default function SistemaDespacho() {
                       <h3>Acompanhamentos Especiais</h3>
                       <div className="header-buttons">
                         <button className="btn-settings" onClick={() => setShowAccompEmailModal(!showAccompEmailModal)}>⚙️ Emails</button>
+                        <button className="btn-verify" onClick={verifyAllAccompaniments}>✓ Verificar todos os processos</button>
                         <button className="btn-new" onClick={() => setNewAccompanimentMode(true)}>+ Novo</button>
                       </div>
                     </div>
