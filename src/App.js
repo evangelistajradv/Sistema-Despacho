@@ -247,7 +247,7 @@ export default function SistemaDespacho() {
   // os usuários do público-alvo) e dispara o push para os mesmos usuários.
   // Como o sino lê do Firebase e o push carrega o id do documento, marcar como lida
   // em qualquer um dos canais reflete no outro.
-  const createNotification = async (category, { title, main, secondary, icon, tab }) => {
+  const createNotification = async (category, { title, main, secondary, icon, tab, itemId }) => {
     try {
       const config = pushNotifConfig[category] || {};
       const audience = Object.entries(config).filter(([, on]) => on).map(([role]) => role);
@@ -260,6 +260,7 @@ export default function SistemaDespacho() {
         secondary: secondary || '',
         icon: icon || '🔔',
         tab: tab || '',
+        itemId: itemId || '',
         audience,
         readBy: {},
         clearedBy: [],
@@ -272,6 +273,7 @@ export default function SistemaDespacho() {
         title: title || 'ASSTEC',
         body: `${main || ''}${secondary ? '\n' + secondary : ''}`.substring(0, 150),
         tab: tab || '',
+        itemId: itemId || '',
         tag: ref.id,
         notifId: ref.id,
       });
@@ -772,6 +774,7 @@ export default function SistemaDespacho() {
       main: `Processo ${newSelected.numeroProcesso}`,
       secondary: changedFields.substring(0, 120),
       tab: 'acompanhamentos',
+      itemId: newSelected.id,
     });
   };
 
@@ -881,6 +884,7 @@ export default function SistemaDespacho() {
         main: `Diário #${newDoe.numeroDiario || 'S/N'} — ${new Date(newDoe.dataPublicacao).toLocaleDateString('pt-BR')}`,
         secondary: `${newDoe.conteudo.replace(/\*([^*]+)\*/g, '$1').substring(0, 100)}...`,
         tab: 'doe',
+        itemId: docRef.id,
       });
 
       setNewDoe({ dataPublicacao: '', dataDisponibilizacao: '', numeroDiario: '', conteudo: '' });
@@ -1160,6 +1164,7 @@ export default function SistemaDespacho() {
             main: `Processo ${hearing.seiNumber}`,
             secondary: `${new Date(hearing.data).toLocaleDateString('pt-BR')} às ${hearing.hora || 'horário a definir'}`,
             tab: 'audiencias',
+            itemId: hearing.id,
           });
           console.log(`✅ Email audiência (${deveEnviar5 ? 5 : 1} dias antes) enviado e flag salvo`);
         } catch (e) {
@@ -1203,6 +1208,7 @@ export default function SistemaDespacho() {
                 main: `Processo ${dl.numeroPJE || dl.numeroSEI}`,
                 secondary: `${dl.objeto ? dl.objeto.substring(0, 80) + ' — ' : ''}Vence em ${new Date(dl.prazoFatal).toLocaleDateString('pt-BR')}`,
                 tab: 'prazos',
+                itemId: dl.id,
               });
             } catch (e) { console.warn('⚠️ Erro ao marcar flag prazo:', e.message); }
           }
@@ -1382,7 +1388,17 @@ export default function SistemaDespacho() {
             <p className="user-role">{ALL_USERS[currentUser]?.role}</p>
           </div>
           <div className="sidebar-actions">
-            <NotificationCenter currentUser={currentUser} USUARIOS={ALL_USERS} />
+            <NotificationCenter
+              currentUser={currentUser}
+              USUARIOS={ALL_USERS}
+              setActiveTab={setActiveTab}
+              setSelectedAccompaniment={setSelectedAccompaniment}
+              setSelectedDeadline={setSelectedDeadline}
+              setSelectedHearing={setSelectedHearing}
+              setSelectedDoe={setSelectedDoe}
+              accompEdits={accompEdits}
+              setAccompEdits={setAccompEdits}
+            />
             <button className="btn-icon" onClick={() => setShowSettings(!showSettings)} title="Configurações"><i className="ti ti-settings"></i></button>
             <button className="btn-icon" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title="Alternar tema"><i className={`ti ${theme === 'light' ? 'ti-moon' : 'ti-sun'}`}></i></button>
             <button className="btn-icon btn-logout" onClick={handleLogout} title="Sair"><i className="ti ti-logout"></i></button>
@@ -2363,7 +2379,17 @@ export default function SistemaDespacho() {
       {/* Barra de ações fixa no rodapé — visível apenas no mobile */}
       <div className="mobile-bottom-bar">
         <span className="mobile-user-label">{ALL_USERS[currentUser]?.nome}</span>
-        <NotificationCenter currentUser={currentUser} USUARIOS={ALL_USERS} />
+        <NotificationCenter
+          currentUser={currentUser}
+          USUARIOS={ALL_USERS}
+          setActiveTab={setActiveTab}
+          setSelectedAccompaniment={setSelectedAccompaniment}
+          setSelectedDeadline={setSelectedDeadline}
+          setSelectedHearing={setSelectedHearing}
+          setSelectedDoe={setSelectedDoe}
+          accompEdits={accompEdits}
+          setAccompEdits={setAccompEdits}
+        />
         <button className="btn-icon" onClick={() => setShowSettings(!showSettings)} title="Configurações"><i className="ti ti-settings"></i></button>
         <button className="btn-icon" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title="Tema"><i className={`ti ${theme === 'light' ? 'ti-moon' : 'ti-sun'}`}></i></button>
         <button className="btn-icon btn-logout" onClick={handleLogout} title="Sair"><i className="ti ti-logout"></i></button>

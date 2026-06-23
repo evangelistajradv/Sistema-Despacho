@@ -2597,6 +2597,26 @@ h1, h2, h3, .logo-text h2 {
   border-color: var(--neutral-300);
 }
 
+.mark-all-btn {
+  padding: 9px 16px;
+  background: var(--primary-main);
+  border: 1px solid var(--primary-main);
+  color: white;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0.3px;
+  transition: var(--transition);
+  margin-right: 8px;
+}
+
+.mark-all-btn:hover {
+  background: var(--primary-dark);
+  border-color: var(--primary-dark);
+}
+
 /* NOTIFICATION BANNERS */
 .notification-banners {
   position: fixed;

@@ -1,12 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase-config';
-import { collection, onSnapshot, doc, updateDoc, arrayUnion } from 'firebase/firestore';
+import { collection, onSnapshot, doc, updateDoc, arrayUnion, getDoc } from 'firebase/firestore';
 
 // Central de Notificações (sino) — lê as notificações persistidas no Firebase.
 // Como as notificações ficam no banco, elas aparecem aqui mesmo quando chegaram
 // como push no celular, e o estado de "lida" fica sincronizado entre os canais
 // e entre os dispositivos do mesmo usuário.
-export default function NotificationCenter({ currentUser }) {
+export default function NotificationCenter({
+  currentUser,
+  setActiveTab,
+  setSelectedAccompaniment,
+  setSelectedDeadline,
+  setSelectedHearing,
+  setSelectedDoe,
+  accompEdits,
+  setAccompEdits,
+}) {
   const [isOpen, setIsOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
 
@@ -43,6 +52,68 @@ export default function NotificationCenter({ currentUser }) {
     } catch (e) {
       console.warn('⚠️ Falha ao marcar como lida:', e.message);
     }
+  };
+
+  // Marca todas as notificações não lidas como lidas
+  const markAllAsRead = async () => {
+    const unread = notifications.filter((n) => !isRead(n));
+    for (const n of unread) {
+      await markRead(n);
+    }
+  };
+
+  // Redireciona pro item que gerou a notificação e marca como lida
+  const handleNotificationClick = async (n) => {
+    await markRead(n);
+
+    // Redireciona para a aba e seleciona o item
+    if (setActiveTab && n.tab) {
+      setActiveTab(n.tab);
+
+      // Se há um itemId, abre o item específico
+      if (n.itemId) {
+        if (n.tab === 'acompanhamentos' && setSelectedAccompaniment) {
+          try {
+            const snap = await getDoc(doc(db, 'acompanhamentos', n.itemId));
+            if (snap.exists()) {
+              setSelectedAccompaniment({ id: snap.id, ...snap.data() });
+              if (setAccompEdits) setAccompEdits({});
+            }
+          } catch (e) {
+            console.warn('⚠️ Erro ao carregar acompanhamento:', e.message);
+          }
+        } else if (n.tab === 'prazos' && setSelectedDeadline) {
+          try {
+            const snap = await getDoc(doc(db, 'prazos', n.itemId));
+            if (snap.exists()) {
+              setSelectedDeadline({ id: snap.id, ...snap.data() });
+            }
+          } catch (e) {
+            console.warn('⚠️ Erro ao carregar prazo:', e.message);
+          }
+        } else if (n.tab === 'audiencias' && setSelectedHearing) {
+          try {
+            const snap = await getDoc(doc(db, 'audiencias', n.itemId));
+            if (snap.exists()) {
+              setSelectedHearing({ id: snap.id, ...snap.data() });
+            }
+          } catch (e) {
+            console.warn('⚠️ Erro ao carregar audiência:', e.message);
+          }
+        } else if (n.tab === 'doe' && setSelectedDoe) {
+          try {
+            const snap = await getDoc(doc(db, 'doe', n.itemId));
+            if (snap.exists()) {
+              setSelectedDoe({ id: snap.id, ...snap.data() });
+            }
+          } catch (e) {
+            console.warn('⚠️ Erro ao carregar DOE:', e.message);
+          }
+        }
+      }
+    }
+
+    setIsOpen(false);
   };
 
   const handleClearRead = async () => {
@@ -86,7 +157,8 @@ export default function NotificationCenter({ currentUser }) {
                     <div
                       key={notif.id}
                       className={`notification-item ${isRead(notif) ? 'read' : 'unread'}`}
-                      onClick={() => markRead(notif)}
+                      onClick={() => handleNotificationClick(notif)}
+                      style={{ cursor: 'pointer' }}
                     >
                       <div className="notification-icon">{notif.icon || '🔔'}</div>
                       <div className="notification-content">
@@ -104,13 +176,18 @@ export default function NotificationCenter({ currentUser }) {
                   ))}
                 </div>
 
-                {notifications.some((n) => isRead(n)) && (
-                  <div className="notification-footer">
+                <div className="notification-footer">
+                  {notifications.some((n) => !isRead(n)) && (
+                    <button className="mark-all-btn" onClick={markAllAsRead}>
+                      Ler todas
+                    </button>
+                  )}
+                  {notifications.some((n) => isRead(n)) && (
                     <button className="clear-btn" onClick={handleClearRead}>
                       Limpar lidas
                     </button>
-                  </div>
-                )}
+                  )}
+                </div>
               </>
             )}
           </div>
