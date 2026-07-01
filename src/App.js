@@ -599,6 +599,18 @@ export default function SistemaDespacho() {
     alert(`Pronto. No próximo login, ${ALL_USERS[role]?.nome} vai cadastrar um e-mail e senha novos.`);
   };
 
+  // Limpa o e-mail de um usuário (útil se o e-mail está "bloqueado" no Firebase
+  // porque foi registrado antes e não foi vinculado corretamente)
+  const clearUserEmail = async (role) => {
+    if (!window.confirm(`Limpar o e-mail de ${ALL_USERS[role]?.nome}? Essa pessoa vai precisar cadastrar novamente.`)) return;
+    const newEmails = { ...userEmails }; delete newEmails[role];
+    const newRegistered = { ...emailRegistered, [role]: false };
+    const newForce = { ...forceReRegister, [role]: true };
+    setUserEmails(newEmails); setEmailRegistered(newRegistered); setForceReRegister(newForce);
+    await saveConfig({ userEmails: newEmails, emailRegistered: newRegistered, forceReRegister: newForce });
+    alert(`E-mail de ${ALL_USERS[role]?.nome} foi resetado. No próximo login, a pessoa pode tentar cadastrar o mesmo e-mail novamente.`);
+  };
+
   // ─── Criar / renomear / remover usuários (master) ───────────────────────────
   const slugify = (s) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 
@@ -2357,6 +2369,11 @@ export default function SistemaDespacho() {
                             <button type="button" className="link-btn" onClick={() => forceRoleReRegister(role)}>
                               <i className="ti ti-refresh"></i> Forçar novo cadastro
                             </button>
+                            {userEmails[role] && (
+                              <button type="button" className="link-btn" onClick={() => clearUserEmail(role)}>
+                                <i className="ti ti-x"></i> Limpar e-mail
+                              </button>
+                            )}
                             {!USUARIOS[role] && (
                               <button type="button" className="link-btn" onClick={() => deleteCustomUser(role)}>
                                 <i className="ti ti-trash"></i> Remover usuário
