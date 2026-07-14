@@ -295,7 +295,7 @@ export default function SistemaDespacho() {
     const vencido = daysLeft < 0;
     const urgente = !vencido && daysLeft <= 3;
     const alerta = !vencido && daysLeft <= 7;
-    const cor = vencido ? 'var(--accent-red)' : urgente ? '#e85d04' : alerta ? '#f48c06' : 'var(--primary-main)';
+    const cor = vencido ? 'var(--accent-red)' : urgente ? 'var(--accent-urgent)' : alerta ? 'var(--accent-alert)' : 'var(--primary-main)';
     const label = vencido ? 'VENCIDO' : daysLeft === 0 ? 'HOJE!' : `${daysLeft} dia(s)`;
     return { daysLeft, vencido, urgente, alerta, cor, label };
   };
@@ -1354,7 +1354,7 @@ export default function SistemaDespacho() {
               <label htmlFor="reg-senha-confirma">Confirmar nova senha</label>
               <PasswordField id="reg-senha-confirma" value={regConfirmPass} onChange={(e) => setRegConfirmPass(e.target.value)} placeholder="Repita a nova senha" className="login-input" />
             </div>
-            {regError && <p className="login-footer" style={{color:'var(--danger-main, #dc2626)'}}>{regError}</p>}
+            {regError && <p className="login-footer" style={{color:'var(--accent-red)'}}>{regError}</p>}
             <button type="submit" className="login-button">Cadastrar e Entrar</button>
             <div className="login-divider"><span>ou</span></div>
             <button type="button" className="google-btn" onClick={() => handleGoogleAuth({ isRegistration: true })}>
@@ -1425,7 +1425,7 @@ export default function SistemaDespacho() {
           ))}
         </nav>
         <div className="sidebar-footer">
-          <div className="user-info">
+          <div className="user-info" data-initial={(ALL_USERS[currentUser]?.nome || '?').charAt(0).toUpperCase()}>
             <p className="user-name">{ALL_USERS[currentUser]?.nome}</p>
             <p className="user-role">{ALL_USERS[currentUser]?.role}</p>
           </div>
@@ -1476,26 +1476,30 @@ export default function SistemaDespacho() {
                   <div className="dashboard-kpis">
                     {dashboardConfig.showPendentes && tabVisible('despacho-gab') && (
                       <button type="button" className="kpi-card" onClick={() => setActiveTab('despacho-gab')}>
+                        <span className="kpi-icon kpi-icon--gold"><i className="ti ti-gavel"></i></span>
                         <span className="kpi-value">{pendentes.length}</span>
-                        <span className="kpi-label"><i className="ti ti-gavel"></i> Despachos pendentes</span>
+                        <span className="kpi-label">Despachos pendentes</span>
                       </button>
                     )}
                     {dashboardConfig.showPrazos && tabVisible('prazos') && (
                       <button type="button" className="kpi-card" onClick={() => setActiveTab('prazos')}>
+                        <span className="kpi-icon kpi-icon--warning"><i className="ti ti-scale"></i></span>
                         <span className="kpi-value">{prazosOrdenados.length}</span>
-                        <span className="kpi-label"><i className="ti ti-scale"></i> Prazos vencendo (até {dashboardConfig.diasPrazoAlerta}d)</span>
+                        <span className="kpi-label">Prazos vencendo (até {dashboardConfig.diasPrazoAlerta}d)</span>
                       </button>
                     )}
                     {dashboardConfig.showAudiencias && tabVisible('audiencias') && (
                       <button type="button" className="kpi-card" onClick={() => setActiveTab('audiencias')}>
+                        <span className="kpi-icon kpi-icon--info"><i className="ti ti-calendar-event"></i></span>
                         <span className="kpi-value">{audienciasSemana.length}</span>
-                        <span className="kpi-label"><i className="ti ti-calendar-event"></i> Audiências esta semana</span>
+                        <span className="kpi-label">Audiências esta semana</span>
                       </button>
                     )}
                     {dashboardConfig.showAcompanhamentos && tabVisible('acompanhamentos') && (
                       <button type="button" className="kpi-card" onClick={() => setActiveTab('acompanhamentos')}>
+                        <span className="kpi-icon kpi-icon--success"><i className="ti ti-map-pin"></i></span>
                         <span className="kpi-value">{acompanhamentosMovimentados.length}</span>
-                        <span className="kpi-label"><i className="ti ti-map-pin"></i> Acompanhamentos movimentados</span>
+                        <span className="kpi-label">Acompanhamentos movimentados</span>
                       </button>
                     )}
                   </div>
@@ -1631,7 +1635,7 @@ export default function SistemaDespacho() {
                       <div className="modal-overlay">
                         <div className="modal-box">
                           <h4>Observações do Despacho</h4>
-                          <p style={{fontSize: '13px', color: '#666', marginBottom: '12px'}}>Informe observações (opcional) para disponibilizar à equipe.</p>
+                          <p style={{fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '12px'}}>Informe observações (opcional) para disponibilizar à equipe.</p>
                           <textarea value={observationText} onChange={(e) => setObservationText(e.target.value)} placeholder="Digite observações..." style={{minHeight: '120px'}} />
                           <div className="modal-actions">
                             <button className="btn-primary" onClick={() => finalizarDespacho('prosseguimento', '', observationText)}>Despachar com Observações</button>
@@ -1659,10 +1663,10 @@ export default function SistemaDespacho() {
                             {process.despachado && <p className="card-dispatch">✓ Despachado em {process.dataDespacho}</p>}
                           </button>
                           {(process.documentos || []).length > 0 && (
-                            <div style={{marginTop: '10px', paddingTop: '10px', borderTop: '1px solid #ddd'}}>
-                              <div style={{fontSize: '12px', fontWeight: 'bold', marginBottom: '6px', color: '#2c5aa0'}}>📎 Documentos:</div>
+                            <div style={{marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--border-color)'}}>
+                              <div style={{fontSize: '12px', fontWeight: 'bold', marginBottom: '6px', color: 'var(--primary-main)'}}>📎 Documentos:</div>
                               {(process.documentos || []).map((documento, i) => (
-                                <a key={i} href={documento.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} style={{display: 'block', padding: '6px', marginBottom: '4px', backgroundColor: 'var(--neutral-200)', borderRadius: '4px', color: '#2c5aa0', fontSize: '12px', textDecoration: 'none'}}>
+                                <a key={i} href={documento.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} style={{display: 'block', padding: '6px', marginBottom: '4px', backgroundColor: 'var(--neutral-200)', borderRadius: '4px', color: 'var(--primary-main)', fontSize: '12px', textDecoration: 'none'}}>
                                   📄 {documento.nome}
                                 </a>
                               ))}
@@ -1797,25 +1801,22 @@ export default function SistemaDespacho() {
             {activeTab === 'audiencias' && (
               <>
                 {!newHearingMode && !selectedHearing && (
-                  <div style={{ display: 'flex', gap: '10px', marginBottom: '2rem' }}>
+                  <div className="view-toggle-group">
                     <button
                       className={`btn-settings ${hearingViewMode === 'list' ? 'active' : ''}`}
                       onClick={() => setHearingViewMode('list')}
-                      style={{ background: hearingViewMode === 'list' ? 'var(--primary-main)' : 'var(--neutral-100)', color: hearingViewMode === 'list' ? 'white' : 'var(--primary-main)' }}
                     >
                       📋 Por Processo
                     </button>
                     <button
                       className={`btn-settings ${hearingViewMode === 'timeline' ? 'active' : ''}`}
                       onClick={() => setHearingViewMode('timeline')}
-                      style={{ background: hearingViewMode === 'timeline' ? 'var(--primary-main)' : 'var(--neutral-100)', color: hearingViewMode === 'timeline' ? 'white' : 'var(--primary-main)' }}
                     >
                       ⏳ Próxima → Remota
                     </button>
                     <button
                       className={`btn-settings ${hearingViewMode === 'calendar' ? 'active' : ''}`}
                       onClick={() => setHearingViewMode('calendar')}
-                      style={{ background: hearingViewMode === 'calendar' ? 'var(--primary-main)' : 'var(--neutral-100)', color: hearingViewMode === 'calendar' ? 'white' : 'var(--primary-main)' }}
                     >
                       📅 Calendário
                     </button>
