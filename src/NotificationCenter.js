@@ -13,6 +13,7 @@ export default function NotificationCenter({
   setSelectedDeadline,
   setSelectedHearing,
   setSelectedDoe,
+  setSelectedProcess,
   accompEdits,
   setAccompEdits,
 }) {
@@ -108,6 +109,15 @@ export default function NotificationCenter({
             }
           } catch (e) {
             console.warn('⚠️ Erro ao carregar DOE:', e.message);
+          }
+        } else if (n.tab === 'despacho-gab' && setSelectedProcess) {
+          try {
+            const snap = await getDoc(doc(db, 'processos', n.itemId));
+            if (snap.exists()) {
+              setSelectedProcess({ id: snap.id, ...snap.data() });
+            }
+          } catch (e) {
+            console.warn('⚠️ Erro ao carregar despacho:', e.message);
           }
         }
       }

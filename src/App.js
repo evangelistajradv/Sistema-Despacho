@@ -136,6 +136,8 @@ export default function SistemaDespacho() {
     acompanhamentos: { master: false, secretario: true,  chefe_gab: true,  servidora: false, estagiaria: false },
     doe:             { master: false, secretario: true,  chefe_gab: true,  servidora: false, estagiaria: false },
     prazos:          { master: true,  secretario: true,  chefe_gab: true,  servidora: true,  estagiaria: true  },
+    despachoCriacao: { master: false, secretario: true,  chefe_gab: false, servidora: false, estagiaria: false },
+    despachoStatus:  { master: false, secretario: true,  chefe_gab: true,  servidora: false, estagiaria: false },
   };
   const [pushNotifConfig, setPushNotifConfig] = useState(DEFAULT_PUSH_CONFIG);
 
@@ -734,6 +736,19 @@ export default function SistemaDespacho() {
         }
         await updateDoc(docRef, { documentos: docs });
       }
+
+      if (notifEnabled('despachoCriacao')) {
+        addBanner(`⚖️ Novo despacho de gabinete — ${newProcess.numero}`, 'info');
+      }
+      createNotification('despachoCriacao', {
+        title: '⚖️ Novo Despacho de Gabinete',
+        icon: '⚖️',
+        main: `Processo ${newProcess.numero}`,
+        secondary: newProcess.objeto.substring(0, 120),
+        tab: 'despacho-gab',
+        itemId: docRef.id,
+      });
+
       setNewProcess({ numero: '', objeto: '', parteInteressada: '', analise: '' });
       setNewProcessDocs([]);
       setNewProcessMode(false);
@@ -832,6 +847,21 @@ export default function SistemaDespacho() {
     if (observacoes) updatedProcess.observacoes = observacoes;
     await updateDoc(doc(db, 'processos', selectedProcess.id), updatedProcess);
     setSelectedProcess({ ...selectedProcess, ...updatedProcess });
+
+    const statusLabels = { deferido: 'Autorizado', indeferido: 'Negado', diligencia: 'Diligência' };
+    const statusLabel = statusLabels[updatedProcess.status] || updatedProcess.status;
+    if (notifEnabled('despachoStatus')) {
+      addBanner(`⚖️ Despacho ${selectedProcess.numero} — ${statusLabel}`, 'info');
+    }
+    createNotification('despachoStatus', {
+      title: '⚖️ Despacho Atualizado',
+      icon: '⚖️',
+      main: `Processo ${selectedProcess.numero} — ${statusLabel}`,
+      secondary: (action === 'diligencia' ? diligencia : observacoes || '').substring(0, 120),
+      tab: 'despacho-gab',
+      itemId: selectedProcess.id,
+    });
+
     setShowDiligenceModal(false);
     setDiligenceText('');
     setShowObservationsModal(false);
@@ -1408,6 +1438,7 @@ export default function SistemaDespacho() {
               setSelectedDeadline={setSelectedDeadline}
               setSelectedHearing={setSelectedHearing}
               setSelectedDoe={setSelectedDoe}
+              setSelectedProcess={setSelectedProcess}
               accompEdits={accompEdits}
               setAccompEdits={setAccompEdits}
             />
@@ -2247,6 +2278,8 @@ export default function SistemaDespacho() {
                         { key: 'acompanhamentos', label: 'Acompanhamentos', icon: 'ti-map-pin', desc: 'quando atualizado' },
                         { key: 'doe',             label: 'DOE/PI', icon: 'ti-news', desc: 'nova publicação' },
                         { key: 'prazos',          label: 'Prazos Judiciais', icon: 'ti-scale', desc: '10, 5, 3 e 2 dias antes' },
+                        { key: 'despachoCriacao', label: 'Despachos — Criação', icon: 'ti-gavel', desc: 'quando um novo despacho é criado' },
+                        { key: 'despachoStatus',  label: 'Despachos — Alteração', icon: 'ti-gavel', desc: 'autorizado, diligência ou negado' },
                       ].map(({ key, label, icon, desc }) => (
                         <div key={key} className="push-config-block">
                           <div className="push-config-title">
@@ -2404,6 +2437,7 @@ export default function SistemaDespacho() {
           setSelectedDeadline={setSelectedDeadline}
           setSelectedHearing={setSelectedHearing}
           setSelectedDoe={setSelectedDoe}
+          setSelectedProcess={setSelectedProcess}
           accompEdits={accompEdits}
           setAccompEdits={setAccompEdits}
         />
