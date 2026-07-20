@@ -28,6 +28,12 @@
   --accent-urgent:     #C15A24;
   --accent-alert:      #C89A32;
 
+  /* Alertas de audiência: 3 dias ou menos = amarelo; entre 4 e 5 dias = azul.
+     Azul propositalmente mais claro/vívido do que a tinta do tema para se
+     destacar sobre o navy escuro da barra lateral e do modo escuro. */
+  --accent-hearing-urgent: #E3B023;
+  --accent-hearing-soon:   #2E86C1;
+
   --neutral-50:  #F6F7FA;
   --neutral-100: #EDF0F5;
   --neutral-200: #E0E4EC;
@@ -909,6 +915,16 @@ button, input, select, textarea {
 .badge.status-diligencia {
   background: rgba(34, 62, 104, 0.12);
   color: var(--primary-main);
+}
+
+.badge.hearing-urgent {
+  background: rgba(227, 176, 35, 0.16);
+  color: var(--accent-hearing-urgent);
+}
+
+.badge.hearing-soon {
+  background: rgba(46, 134, 193, 0.14);
+  color: var(--accent-hearing-soon);
 }
 
 .empty-state {

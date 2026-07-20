@@ -300,6 +300,16 @@ export default function SistemaDespacho() {
     return { daysLeft, vencido, urgente, alerta, cor, label };
   };
 
+  // Urgência de uma audiência: usado no Painel e na aba Audiências.
+  // 3 dias ou menos = amarelo (mais urgente); entre 4 e 5 dias = azul.
+  const hearingStatus = (data) => {
+    const daysLeft = Math.ceil((new Date(data + 'T23:59:59') - new Date()) / (1000 * 60 * 60 * 24));
+    const urgente = daysLeft >= 0 && daysLeft <= 3;
+    const proxima = daysLeft > 3 && daysLeft <= 5;
+    const cor = urgente ? 'var(--accent-hearing-urgent)' : proxima ? 'var(--accent-hearing-soon)' : null;
+    return { daysLeft, urgente, proxima, cor };
+  };
+
   // ─── Segurança: hash de senha (SHA-256) ────────────────────────────────────
   const hashPassword = async (text) => {
     try {
@@ -1552,15 +1562,21 @@ export default function SistemaDespacho() {
                       {audienciasSemana.length === 0 ? (
                         <p className="dashboard-empty">Nenhuma audiência nos próximos 7 dias.</p>
                       ) : (
-                        audienciasSemana.map((h) => (
-                          <div key={h.id} onClick={() => { setActiveTab('audiencias'); setSelectedHearing(h); }} className="card-item">
-                            <div className="card-top">
-                              <strong>{h.seiNumber}</strong>
-                              <span className="badge">{new Date(h.data).toLocaleDateString('pt-BR')} {h.hora}</span>
+                        audienciasSemana.map((h) => {
+                          const hs = hearingStatus(h.data);
+                          return (
+                            <div key={h.id} onClick={() => { setActiveTab('audiencias'); setSelectedHearing(h); }}
+                              className="card-item" style={hs.cor ? { borderLeft: `4px solid ${hs.cor}` } : undefined}>
+                              <div className="card-top">
+                                <strong>{h.seiNumber}</strong>
+                                <span className={`badge ${hs.urgente ? 'hearing-urgent' : hs.proxima ? 'hearing-soon' : ''}`}>
+                                  {new Date(h.data).toLocaleDateString('pt-BR')}{h.hora && ` às ${h.hora}`}
+                                </span>
+                              </div>
+                              {h.objeto && <p className="card-text">{h.objeto.substring(0, 100)}</p>}
                             </div>
-                            {h.objeto && <p className="card-text">{h.objeto.substring(0, 100)}</p>}
-                          </div>
-                        ))
+                          );
+                        })
                       )}
                     </div>
                   )}
@@ -1906,14 +1922,23 @@ export default function SistemaDespacho() {
                   <div className="list-view">
                     <div className="list-header"><h3>Audiências</h3><button className="btn-new" onClick={() => setNewHearingMode(true)}>+ Nova</button></div>
                     {hearings.length === 0 ? (<p className="empty-state">Nenhuma audiência</p>) : (
-                      hearings.sort((a, b) => new Date(a.data) - new Date(b.data)).map(hearing => (
-                        <div key={hearing.id} onClick={() => setSelectedHearing(hearing)} className="card-item">
-                          <div className="card-top"><strong>{hearing.seiNumber}</strong><span className="badge">{new Date(hearing.data).toLocaleDateString('pt-BR')}</span></div>
-                          {hearing.objeto && <p className="card-text"><strong>Objeto:</strong> {hearing.objeto}</p>}
-                          {hearing.hora && <p className="card-text"><strong>Hora:</strong> {hearing.hora}</p>}
-                          {hearing.setorResponsavel && <p className="card-text"><strong>Setor:</strong> {hearing.setorResponsavel}</p>}
-                        </div>
-                      ))
+                      hearings.sort((a, b) => new Date(a.data) - new Date(b.data)).map(hearing => {
+                        const hs = hearingStatus(hearing.data);
+                        return (
+                          <div key={hearing.id} onClick={() => setSelectedHearing(hearing)}
+                            className="card-item" style={hs.cor ? { borderLeft: `4px solid ${hs.cor}` } : undefined}>
+                            <div className="card-top">
+                              <strong>{hearing.seiNumber}</strong>
+                              <span className={`badge ${hs.urgente ? 'hearing-urgent' : hs.proxima ? 'hearing-soon' : ''}`}>
+                                {new Date(hearing.data).toLocaleDateString('pt-BR')}{hearing.hora && ` às ${hearing.hora}`}
+                              </span>
+                            </div>
+                            {hearing.objeto && <p className="card-text"><strong>Objeto:</strong> {hearing.objeto}</p>}
+                            {hearing.hora && <p className="card-text"><strong>Hora:</strong> {hearing.hora}</p>}
+                            {hearing.setorResponsavel && <p className="card-text"><strong>Setor:</strong> {hearing.setorResponsavel}</p>}
+                          </div>
+                        );
+                      })
                     )}
                   </div>
                 )}
