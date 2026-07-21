@@ -24,6 +24,15 @@ const USUARIOS = {
   estagiaria: { nome: 'Maria Clara', role: 'estagiaria', permissions: ['ver', 'editar', 'criar', 'comentar'] }
 };
 
+// Setor de origem de quem cria um despacho de gabinete — usado na tag exibida no card.
+const SETOR_POR_USUARIO = {
+  master: 'ASSTEC',
+  servidora: 'ASSTEC',
+  estagiaria: 'ASSTEC',
+  chefe_gab: 'GAB',
+  luis_m_v: 'SGE',
+};
+
 // Campo de senha com o "olhinho" para mostrar/ocultar o que foi digitado.
 function PasswordField({ id, value, onChange, placeholder, className }) {
   const [show, setShow] = useState(false);
@@ -735,7 +744,7 @@ export default function SistemaDespacho() {
         type: 'gabinete', numero: newProcess.numero, objeto: newProcess.objeto,
         parteInteressada: newProcess.parteInteressada, analise: newProcess.analise,
         dataEntrada: new Date().toISOString().split('T')[0], status: 'pendente',
-        dataDespacho: null, despachado: false, motivo: ''
+        dataDespacho: null, despachado: false, motivo: '', criadoPor: currentUser
       });
       if (newProcessDocs.length > 0) {
         const docs = [];
@@ -1594,7 +1603,7 @@ export default function SistemaDespacho() {
                       <div className="form-group"><label>Parte Interessada</label><input type="text" placeholder="Secretaria..." value={newProcess.parteInteressada} onChange={(e) => setNewProcess({...newProcess, parteInteressada: e.target.value})} /></div>
                     </div>
                     <div className="form-group"><label>Objeto *</label><textarea placeholder="Descrição..." value={newProcess.objeto} onChange={(e) => setNewProcess({...newProcess, objeto: e.target.value})} /></div>
-                    <div className="form-group"><label>Análise Jurídica</label><textarea placeholder="Parecer..." value={newProcess.analise} onChange={(e) => setNewProcess({...newProcess, analise: e.target.value})} /></div>
+                    <div className="form-group"><label>Análise Técnica</label><textarea placeholder="Parecer..." value={newProcess.analise} onChange={(e) => setNewProcess({...newProcess, analise: e.target.value})} /></div>
                     {renderPendingAttachments(newProcessDocs, setNewProcessDocs)}
                     <div className="form-actions">
                       <button className="btn-primary" onClick={createNewProcess} disabled={loading}>{loading ? 'Salvando...' : 'Criar'}</button>
@@ -1614,13 +1623,13 @@ export default function SistemaDespacho() {
                         <p><strong>Decisão:</strong> {selectedProcess.motivo}</p>
                       </div>
                     )}
-                    <div className="info-grid">
-                      <div className="info-item"><label>Objeto</label><p>{selectedProcess.objeto}</p></div>
-                      <div className="info-item"><label>Parte</label><p>{selectedProcess.parteInteressada}</p></div>
-                      <div className="info-item"><label>Data Entrada</label><p>{selectedProcess.dataEntrada}</p></div>
-                      <div className="info-item"><label>Status</label><p>{selectedProcess.status}</p></div>
+                    <div className="info-box"><label>Objeto</label><p>{selectedProcess.objeto}</p></div>
+                    <div className="info-meta-grid">
+                      <div className="info-meta-item"><label>Parte</label><p>{selectedProcess.parteInteressada || '—'}</p></div>
+                      <div className="info-meta-item"><label>Data Entrada</label><p>{selectedProcess.dataEntrada}</p></div>
+                      <div className="info-meta-item"><label>Status</label><p>{selectedProcess.status}</p></div>
                     </div>
-                    <div className="info-box"><label>Análise Jurídica</label><p>{selectedProcess.analise || 'Sem análise'}</p></div>
+                    <div className="info-box"><label>Análise Técnica</label><p>{selectedProcess.analise || 'Sem análise'}</p></div>
                     {selectedProcess.observacoes && (
                       <div className="info-box">
                         <label>📝 Observações do Despacho</label>
@@ -1671,8 +1680,16 @@ export default function SistemaDespacho() {
                       processes.map(process => (
                         <div key={process.id} className={`card-item ${process.despachado ? 'despachado' : ''}`} style={{position: 'relative'}}>
                           <button onClick={() => setSelectedProcess(process)} style={{width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: 0}}>
-                            <div className="card-top"><strong>{process.numero}</strong><span className={`badge status-${process.status}`}>{process.status}</span></div>
-                            <p className="card-text">{process.objeto.substring(0, 120)}</p>
+                            <div className="card-top">
+                              <strong>{process.numero}</strong>
+                              <span style={{display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap'}}>
+                                {SETOR_POR_USUARIO[process.criadoPor] && (
+                                  <span className="badge setor-tag">{SETOR_POR_USUARIO[process.criadoPor]}</span>
+                                )}
+                                <span className={`badge status-${process.status}`}>{process.status}</span>
+                              </span>
+                            </div>
+                            <p className="card-text">{process.objeto.length > 480 ? `${process.objeto.substring(0, 480)}...` : process.objeto}</p>
                             {process.parteInteressada && <p className="card-text"><strong>Parte Interessada:</strong> {process.parteInteressada}</p>}
                             {process.analise && <p className="card-text"><strong>Obs. Assessoria:</strong> {process.analise.substring(0, 100)}{process.analise.length > 100 ? '...' : ''}</p>}
                             <span className="card-date">{process.dataEntrada}</span>
