@@ -114,7 +114,9 @@ export default function SistemaDespacho() {
   });
 
   const [newProcess, setNewProcess] = useState({ numero: '', objeto: '', parteInteressada: '', analise: '' });
-  const [newAccompaniment, setNewAccompaniment] = useState({ objeto: '', numeroProcesso: '', setorAnterior: '', dataSetorAnterior: '', setorAtual: '', dataSetorAtual: '', status: '' });
+  const NEW_ACCOMPANIMENT_DEFAULT = { objeto: '', numeroProcesso: '', setorAnterior: '', dataSetorAnterior: '', setorAtual: '', dataSetorAtual: '', status: '', lembreteAtivo: false, lembreteDias: '', lembreteConteudo: '' };
+  const [newAccompaniment, setNewAccompaniment] = useState(NEW_ACCOMPANIMENT_DEFAULT);
+  const LEMBRETE_TEXTO_PADRAO = 'Verificação de demanda e eventuais atualizações';
   const [newHearing, setNewHearing] = useState({ seiNumber: '', data: '', hora: '', objeto: '', linkSessao: '', setorResponsavel: '', servidoresDesignados: '', emailsNotificacao: '' });
   const [newDoe, setNewDoe] = useState({ dataPublicacao: '', dataDisponibilizacao: '', numeroDiario: '', conteudo: '' });
   const [uploadingDoc, setUploadingDoc] = useState(false);
@@ -405,6 +407,15 @@ export default function SistemaDespacho() {
     return { daysLeft, urgente, proxima, cor };
   };
 
+  // Data em que o lembrete de um acompanhamento deve ser enviado
+  // (lembreteCriadoEm + lembreteDias). Retorna null se o lembrete não estiver configurado.
+  const lembreteDataEnvio = (acc) => {
+    if (!acc.lembreteCriadoEm || !acc.lembreteDias) return null;
+    const d = new Date(acc.lembreteCriadoEm + 'T00:00:00');
+    d.setDate(d.getDate() + Number(acc.lembreteDias));
+    return d;
+  };
+
   const exportarDespachosPdf = () => {
     const corpo = processes.map((p) => `
       <div class="report-item">
@@ -434,6 +445,7 @@ export default function SistemaDespacho() {
         <div class="report-field"><span class="label">Status</span><div class="value">${escapeHtml(acc.status || '—')}</div></div>
         <div class="report-field"><span class="label">Última Movimentação</span><div class="value">${escapeHtml(acc.dataUltimaEdicao || '—')}</div></div>
         <div class="report-field"><span class="label">Última Verificação</span><div class="value">${escapeHtml(acc.dataUltimaVerificacao || '—')}</div></div>
+        ${acc.lembreteAtivo ? `<div class="report-field"><span class="label">Lembrete</span><div class="value">${acc.lembreteEnviado ? 'Enviado' : `Previsto para ${lembreteDataEnvio(acc)?.toLocaleDateString('pt-BR') || '—'}`} — ${escapeHtml(acc.lembreteConteudo || LEMBRETE_TEXTO_PADRAO)}</div></div>` : ''}
       </div>
     `).join('');
     abrirRelatorioPdf(`Acompanhamento ${tituloSetor}`, corpo, accompFiltered.length);
@@ -984,10 +996,18 @@ export default function SistemaDespacho() {
     if (loading) return;
     setLoading(true);
     try {
+      const hoje = new Date().toISOString().split('T')[0];
+      const lembreteAtivo = newAccompaniment.lembreteAtivo && Number(newAccompaniment.lembreteDias) > 0;
       await addDoc(collection(db, 'acompanhamentos'), {
-        ...newAccompaniment, setor: setor || 'gabinete', dataUltimaEdicao: new Date().toISOString().split('T')[0], verificacaoAtualizada: false
+        ...newAccompaniment,
+        lembreteAtivo,
+        lembreteDias: lembreteAtivo ? Number(newAccompaniment.lembreteDias) : null,
+        lembreteConteudo: lembreteAtivo ? newAccompaniment.lembreteConteudo : '',
+        lembreteCriadoEm: lembreteAtivo ? hoje : null,
+        lembreteEnviado: false,
+        setor: setor || 'gabinete', dataUltimaEdicao: hoje, verificacaoAtualizada: false
       });
-      setNewAccompaniment({ objeto: '', numeroProcesso: '', setorAnterior: '', dataSetorAnterior: '', setorAtual: '', dataSetorAtual: '', status: '' });
+      setNewAccompaniment(NEW_ACCOMPANIMENT_DEFAULT);
       setNewAccompanimentMode(false);
     } catch (e) { console.error('❌ Erro:', e.message); alert('Erro ao salvar. Verifique as regras do Firebase.'); }
     finally { setLoading(false); }
@@ -1486,6 +1506,39 @@ export default function SistemaDespacho() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deadlines]);
 
+  // Verificar lembretes de acompanhamento e disparar notificações
+  useEffect(() => {
+    if (accompaniments.length === 0) return;
+    const checkLembretes = async () => {
+      const hoje = new Date();
+      for (const acc of accompaniments) {
+        if (!acc.lembreteAtivo || acc.lembreteEnviado) continue;
+        const dataEnvio = lembreteDataEnvio(acc);
+        if (!dataEnvio || hoje < dataEnvio) continue;
+        try {
+          // marca o flag primeiro (evita duplicidade entre dispositivos)
+          await updateDoc(doc(db, 'acompanhamentos', acc.id), { lembreteEnviado: true });
+          const categoria = acc.setor === 'asstec' ? 'acompanhamentosAsstec' : 'acompanhamentos';
+          if (notifEnabled(categoria)) {
+            addBanner(`🔔 Lembrete: ${acc.numeroProcesso}`, 'warning');
+          }
+          createNotification(categoria, {
+            title: '🔔 Lembrete de Acompanhamento',
+            icon: '🔔',
+            main: `Processo ${acc.numeroProcesso}`,
+            secondary: (acc.lembreteConteudo || LEMBRETE_TEXTO_PADRAO).substring(0, 120),
+            tab: 'acompanhamentos',
+            itemId: acc.id,
+          });
+        } catch (e) { console.warn('⚠️ Erro ao marcar lembrete enviado:', e.message); }
+      }
+    };
+    checkLembretes();
+    const interval = setInterval(checkLembretes, 3600000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accompaniments]);
+
   const updateHearing = async (id, updatedData) => {
     await updateDoc(doc(db, 'audiencias', id), updatedData);
     setSelectedHearing(prev => ({ ...prev, ...updatedData }));
@@ -1939,9 +1992,42 @@ export default function SistemaDespacho() {
                       <div className="form-group"><label>Data</label><input type="date" value={newAccompaniment.dataSetorAtual} onChange={(e) => setNewAccompaniment({...newAccompaniment, dataSetorAtual: e.target.value})} /></div>
                     </div>
                     <div className="form-group"><label>Status</label><textarea placeholder="Descreva..." value={newAccompaniment.status} onChange={(e) => setNewAccompaniment({...newAccompaniment, status: e.target.value})} /></div>
+                    {acompEffectiveSetor === 'asstec' && (
+                      <div className="info-box" style={{marginTop: '0.5rem'}}>
+                        <label>🔔 Lembrete (opcional)</label>
+                        <div style={{display: 'flex', alignItems: 'center', gap: '8px', margin: '0.6rem 0 1rem'}}>
+                          <input type="checkbox" id="lembrete-ativo-novo" checked={newAccompaniment.lembreteAtivo}
+                            onChange={(e) => setNewAccompaniment({...newAccompaniment, lembreteAtivo: e.target.checked})}
+                            style={{width: '16px', height: '16px', cursor: 'pointer'}} />
+                          <label htmlFor="lembrete-ativo-novo" style={{margin: 0, cursor: 'pointer', textTransform: 'none', fontSize: '13px', fontWeight: 600, opacity: 1}}>
+                            Processo não precisa de acompanhamento diário — avisar mais tarde
+                          </label>
+                        </div>
+                        {newAccompaniment.lembreteAtivo && (
+                          <>
+                            <div className="form-grid">
+                              <div className="form-group">
+                                <label>Notificar em quantos dias</label>
+                                <input type="number" min="1" placeholder="Ex: 15" value={newAccompaniment.lembreteDias}
+                                  onChange={(e) => setNewAccompaniment({...newAccompaniment, lembreteDias: e.target.value})} />
+                              </div>
+                            </div>
+                            <div className="form-group">
+                              <label>Conteúdo do lembrete</label>
+                              <textarea placeholder="O que o lembrete deve dizer..." value={newAccompaniment.lembreteConteudo}
+                                onChange={(e) => setNewAccompaniment({...newAccompaniment, lembreteConteudo: e.target.value})} />
+                              <button type="button" className="push-user-chip" style={{marginTop: '8px'}}
+                                onClick={() => setNewAccompaniment({...newAccompaniment, lembreteConteudo: LEMBRETE_TEXTO_PADRAO})}>
+                                + Usar texto padrão: "{LEMBRETE_TEXTO_PADRAO}"
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
                     <div className="form-actions">
                       <button className="btn-primary" onClick={() => createNewAccompaniment(acompEffectiveSetor)} disabled={loading}>{loading ? 'Salvando...' : 'Criar'}</button>
-                      <button className="btn-secondary" disabled={loading} onClick={() => {setNewAccompanimentMode(false); setNewAccompaniment({ objeto: '', numeroProcesso: '', setorAnterior: '', dataSetorAnterior: '', setorAtual: '', dataSetorAtual: '', status: '' });}}>Cancelar</button>
+                      <button className="btn-secondary" disabled={loading} onClick={() => {setNewAccompanimentMode(false); setNewAccompaniment(NEW_ACCOMPANIMENT_DEFAULT);}}>Cancelar</button>
                     </div>
                   </div>
                 ) : selectedAccompaniment ? (
@@ -1982,6 +2068,52 @@ export default function SistemaDespacho() {
                         onChange={(e) => setAccompEdits((p) => ({ ...p, status: e.target.value }))}
                       /></div>
                     </div>
+                    {selectedAccompaniment.setor === 'asstec' && (
+                      <div className="info-box">
+                        <label>🔔 Lembrete</label>
+                        <div style={{display: 'flex', alignItems: 'center', gap: '8px', margin: '0.6rem 0 1rem'}}>
+                          <input type="checkbox" id="lembrete-ativo-edit"
+                            checked={accompEdits.lembreteAtivo ?? selectedAccompaniment.lembreteAtivo ?? false}
+                            onChange={(e) => {
+                              const ativo = e.target.checked;
+                              setAccompEdits((p) => ({ ...p, lembreteAtivo: ativo, lembreteEnviado: false, lembreteCriadoEm: ativo ? new Date().toISOString().split('T')[0] : null }));
+                            }}
+                            style={{width: '16px', height: '16px', cursor: 'pointer'}} />
+                          <label htmlFor="lembrete-ativo-edit" style={{margin: 0, cursor: 'pointer', textTransform: 'none', fontSize: '13px', fontWeight: 600, opacity: 1}}>
+                            Processo não precisa de acompanhamento diário — avisar mais tarde
+                          </label>
+                        </div>
+                        {(accompEdits.lembreteAtivo ?? selectedAccompaniment.lembreteAtivo) && (
+                          <>
+                            <div className="form-grid">
+                              <div className="form-group">
+                                <label>Notificar em quantos dias</label>
+                                <input type="number" min="1" placeholder="Ex: 15"
+                                  value={accompEdits.lembreteDias ?? selectedAccompaniment.lembreteDias ?? ''}
+                                  onChange={(e) => setAccompEdits((p) => ({ ...p, lembreteDias: e.target.value, lembreteEnviado: false, lembreteCriadoEm: new Date().toISOString().split('T')[0] }))}
+                                />
+                              </div>
+                            </div>
+                            <div className="form-group">
+                              <label>Conteúdo do lembrete</label>
+                              <textarea placeholder="O que o lembrete deve dizer..."
+                                value={accompEdits.lembreteConteudo ?? selectedAccompaniment.lembreteConteudo ?? ''}
+                                onChange={(e) => setAccompEdits((p) => ({ ...p, lembreteConteudo: e.target.value }))}
+                              />
+                              <button type="button" className="push-user-chip" style={{marginTop: '8px'}}
+                                onClick={() => setAccompEdits((p) => ({ ...p, lembreteConteudo: LEMBRETE_TEXTO_PADRAO }))}>
+                                + Usar texto padrão: "{LEMBRETE_TEXTO_PADRAO}"
+                              </button>
+                            </div>
+                            <p className="card-text" style={{marginTop: '0.4rem'}}>
+                              {selectedAccompaniment.lembreteEnviado && !accompEdits.lembreteCriadoEm
+                                ? '✅ Lembrete já enviado.'
+                                : `⏳ Próximo lembrete: ${lembreteDataEnvio({ ...selectedAccompaniment, ...accompEdits })?.toLocaleDateString('pt-BR') || '—'}`}
+                            </p>
+                          </>
+                        )}
+                      </div>
+                    )}
                     <div className="form-actions">
                       <button className="btn-primary" disabled={Object.keys(accompEdits).length === 0}
                         onClick={() => { updateAccompaniment(selectedAccompaniment.id, accompEdits); setAccompEdits({}); }}>
@@ -2050,7 +2182,12 @@ export default function SistemaDespacho() {
                     {accompFiltered.length === 0 ? (<p className="empty-state">Nenhum acompanhamento</p>) : (
                       accompFiltered.map(acc => (
                         <div key={acc.id} onClick={() => { setSelectedAccompaniment(acc); setAccompEdits({}); }} className="card-item">
-                          <div className="card-top"><strong>{acc.numeroProcesso}</strong></div>
+                          <div className="card-top">
+                            <strong>{acc.numeroProcesso}</strong>
+                            {acc.lembreteAtivo && !acc.lembreteEnviado && (
+                              <span className="badge hearing-soon">🔔 Lembrete {lembreteDataEnvio(acc)?.toLocaleDateString('pt-BR') || ''}</span>
+                            )}
+                          </div>
                           <p className="card-text"><strong>Objeto:</strong> {acc.objeto}</p>
                           <p className="card-text"><strong>Setor Anterior:</strong> {acc.setorAnterior} ({acc.dataSetorAnterior})</p>
                           <p className="card-text"><strong>Setor Atual:</strong> {acc.setorAtual} ({acc.dataSetorAtual})</p>
