@@ -569,6 +569,7 @@ export default function SistemaDespacho() {
     });
 
     return () => { cancelled = true; unsubConfig && unsubConfig(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Demais coleções exigem o login real (e-mail/senha) — só assina depois que
