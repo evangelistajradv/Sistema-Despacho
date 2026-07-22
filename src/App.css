@@ -794,6 +794,85 @@ button, input, select, textarea {
   box-shadow: var(--shadow-sm);
 }
 
+/* Subdivisões (ex.: Acompanhamento Gabinete/ASSTEC) — menu que o usuário
+   clica para entrar em cada seção, em vez de um alternador. */
+.subdivision-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 0.5rem;
+}
+
+.subdivision-btn {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 1.3rem 1.5rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: var(--transition);
+  width: 100%;
+}
+
+.subdivision-btn:hover {
+  border-color: var(--accent-gold-light);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+
+.subdivision-icon {
+  width: 46px;
+  height: 46px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  font-size: 21px;
+  background: rgba(34, 62, 104, 0.10);
+  color: var(--primary-main);
+}
+
+.subdivision-icon--gold {
+  background: rgba(181, 146, 62, 0.14);
+  color: var(--accent-gold-dark);
+}
+
+.subdivision-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.subdivision-text strong {
+  font-size: 15px;
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-weight: 600;
+}
+
+.subdivision-text span {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.subdivision-arrow {
+  font-size: 20px;
+  color: var(--text-muted);
+  transition: var(--transition);
+  flex-shrink: 0;
+}
+
+.subdivision-btn:hover .subdivision-arrow {
+  color: var(--accent-gold-dark);
+  transform: translateX(3px);
+}
+
 /* ═══════════════════════════════════════════════════════════════ */
 /* CARDS */
 /* ═══════════════════════════════════════════════════════════════ */

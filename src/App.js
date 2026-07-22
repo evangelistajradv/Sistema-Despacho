@@ -83,12 +83,14 @@ export default function SistemaDespacho() {
   const [accompaniments, setAccompaniments] = useState([]);
   const [selectedProcess, setSelectedProcess] = useState(null);
   const [selectedAccompaniment, setSelectedAccompaniment] = useState(null);
-  const [acompSubTab, setAcompSubTab] = useState('gabinete'); // Gabinete ou ASSTEC, quando o usuário tem acesso aos dois
+  const [acompSubTab, setAcompSubTab] = useState(null); // null = ainda não escolheu; 'gabinete' ou 'asstec' depois de escolher
   const [showDiligenceModal, setShowDiligenceModal] = useState(false);
   const [diligenceText, setDiligenceText] = useState('');
   const [newProcessMode, setNewProcessMode] = useState(false);
   const [newAccompanimentMode, setNewAccompanimentMode] = useState(false);
   const [hearings, setHearings] = useState([]);
+  const [hearingsHistorico, setHearingsHistorico] = useState([]); // audiências arquivadas (> 30 dias): só data + número
+  const [showHearingsHistorico, setShowHearingsHistorico] = useState(false);
   const [selectedHearing, setSelectedHearing] = useState(null);
   const [newHearingMode, setNewHearingMode] = useState(false);
   const [doePublications, setDoePublications] = useState([]);
@@ -590,6 +592,11 @@ export default function SistemaDespacho() {
       (snap) => { setHearings(snap.docs.map(d => ({ id: d.id, ...d.data() }))); },
       (err) => { console.error('❌ Erro audiências Firebase:', err.message); }
     );
+    const unsubHearingsHist = onSnapshot(
+      collection(db, 'audienciasHistorico'),
+      (snap) => { setHearingsHistorico(snap.docs.map(d => ({ id: d.id, ...d.data() }))); },
+      (err) => { console.error('❌ Erro histórico de audiências Firebase:', err.message); }
+    );
     const unsubDoe = onSnapshot(
       collection(db, 'doe'),
       (snap) => { setDoePublications(snap.docs.map(d => ({ id: d.id, ...d.data() }))); },
@@ -601,8 +608,30 @@ export default function SistemaDespacho() {
       (err) => { console.error('❌ Erro prazos Firebase:', err.message); }
     );
 
-    return () => { unsubProcesses(); unsubAcc(); unsubHearings(); unsubDoe(); unsubDeadlines(); };
+    return () => { unsubProcesses(); unsubAcc(); unsubHearings(); unsubHearingsHist(); unsubDoe(); unsubDeadlines(); };
   }, [authenticated]);
+
+  // Arquivamento automático de audiências antigas: quando uma audiência já
+  // ocorreu há mais de 30 dias, guarda só data + número do processo em
+  // "audienciasHistorico" e apaga o registro completo de "audiencias".
+  // Roda a partir da sessão do master para evitar que várias sessões
+  // simultâneas disputem a mesma limpeza.
+  useEffect(() => {
+    if (!authenticated || currentUser !== 'master' || hearings.length === 0) return;
+    const limite = new Date(); limite.setDate(limite.getDate() - 30);
+    const antigas = hearings.filter((h) => h.data && new Date(h.data) < limite);
+    if (antigas.length === 0) return;
+    (async () => {
+      for (const h of antigas) {
+        try {
+          await addDoc(collection(db, 'audienciasHistorico'), { seiNumber: h.seiNumber || '', data: h.data || '', servidoresDesignados: h.servidoresDesignados || '' });
+          await deleteDoc(doc(db, 'audiencias', h.id));
+        } catch (e) {
+          console.warn('⚠️ Falha ao arquivar audiência antiga:', e.message);
+        }
+      }
+    })();
+  }, [hearings, authenticated, currentUser]);
 
   // Salva a config no Firebase. Recebe só os campos que mudaram (overrides);
   // o restante é preenchido com o valor atual em memória.
@@ -883,6 +912,12 @@ export default function SistemaDespacho() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authenticated, currentUser, tabVisibility, activeTab]);
+
+  // Ao sair da aba Acompanhamentos, esquece a escolha de setor — na próxima
+  // vez que entrar, volta a mostrar as subdivisões (Gabinete/ASSTEC).
+  useEffect(() => {
+    if (activeTab !== 'acompanhamentos') setAcompSubTab(null);
+  }, [activeTab]);
 
   const handleLogout = () => {
     signOut(auth).catch((e) => console.warn('Erro ao sair:', e.message));
@@ -1887,16 +1922,6 @@ export default function SistemaDespacho() {
 
             {activeTab === 'acompanhamentos' && (
               <>
-                {!newAccompanimentMode && !selectedAccompaniment && canAcompGab && canAcompAsstec && (
-                  <div className="view-toggle-group">
-                    <button className={`btn-settings ${acompSubTab === 'gabinete' ? 'active' : ''}`} onClick={() => setAcompSubTab('gabinete')}>
-                      🏛️ Gabinete
-                    </button>
-                    <button className={`btn-settings ${acompSubTab === 'asstec' ? 'active' : ''}`} onClick={() => setAcompSubTab('asstec')}>
-                      🌳 ASSTEC
-                    </button>
-                  </div>
-                )}
                 {newAccompanimentMode ? (
                   <div className="form-card">
                     <h3>Novo Acompanhamento</h3>
@@ -1970,10 +1995,35 @@ export default function SistemaDespacho() {
                       <button className="btn-delete" onClick={() => deleteAccompaniment(selectedAccompaniment.id)}>🗑️</button>
                     </div>
                   </div>
+                ) : (canAcompGab && canAcompAsstec && !acompSubTab) ? (
+                  <div className="list-view">
+                    <div className="list-header"><h3>Acompanhamentos</h3></div>
+                    <div className="subdivision-list">
+                      <button type="button" className="subdivision-btn" onClick={() => setAcompSubTab('gabinete')}>
+                        <span className="subdivision-icon">🏛️</span>
+                        <span className="subdivision-text">
+                          <strong>Acompanhamento Gabinete</strong>
+                          <span>Processos e demandas acompanhados pelo Gabinete</span>
+                        </span>
+                        <i className="ti ti-chevron-right subdivision-arrow"></i>
+                      </button>
+                      <button type="button" className="subdivision-btn" onClick={() => setAcompSubTab('asstec')}>
+                        <span className="subdivision-icon subdivision-icon--gold"><i className="ti ti-scale"></i></span>
+                        <span className="subdivision-text">
+                          <strong>Acompanhamento ASSTEC</strong>
+                          <span>Processos e demandas acompanhados pela ASSTEC</span>
+                        </span>
+                        <i className="ti ti-chevron-right subdivision-arrow"></i>
+                      </button>
+                    </div>
+                  </div>
                 ) : (
                   <div className="list-view">
+                    {canAcompGab && canAcompAsstec && (
+                      <button className="back-button" onClick={() => setAcompSubTab(null)}>← Trocar setor</button>
+                    )}
                     <div className="list-header">
-                      <h3>{canAcompGab && canAcompAsstec ? 'Acompanhamentos Especiais' : `Acompanhamento ${acompEffectiveSetor === 'asstec' ? 'ASSTEC' : 'Gabinete'}`}</h3>
+                      <h3>Acompanhamento {acompEffectiveSetor === 'asstec' ? 'ASSTEC' : 'Gabinete'}</h3>
                       <div className="header-buttons">
                         <button className="btn-settings" onClick={exportarAcompanhamentosPdf}>🖨️ Exportar PDF</button>
                         <button className="btn-settings" onClick={() => setShowAccompEmailModal(!showAccompEmailModal)}>⚙️ Emails</button>
@@ -2124,6 +2174,7 @@ export default function SistemaDespacho() {
                       <h3>Audiências</h3>
                       <div className="header-buttons">
                         <button className="btn-settings" onClick={exportarAudienciasPdf}>🖨️ Exportar PDF</button>
+                        <button className="btn-settings" onClick={() => setShowHearingsHistorico(true)}>📜 Histórico Completo</button>
                         <button className="btn-new" onClick={() => setNewHearingMode(true)}>+ Nova</button>
                       </div>
                     </div>
@@ -2146,6 +2197,32 @@ export default function SistemaDespacho() {
                         );
                       })
                     )}
+                  </div>
+                )}
+                {showHearingsHistorico && (
+                  <div className="modal-overlay" onClick={() => setShowHearingsHistorico(false)}>
+                    <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{maxWidth: '480px'}}>
+                      <h4>📜 Histórico de Audiências</h4>
+                      <p>Audiências realizadas há mais de 30 dias — mantido apenas data, número do processo e servidor designado (quando houver).</p>
+                      <div style={{maxHeight: '400px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px', margin: '1.2rem 0 1.7rem'}}>
+                        {hearingsHistorico.length === 0 ? (
+                          <p className="empty-state" style={{padding: '2rem 0'}}>Nenhum registro no histórico ainda.</p>
+                        ) : (
+                          [...hearingsHistorico].sort((a, b) => new Date(b.data) - new Date(a.data)).map((h) => (
+                            <div key={h.id} style={{padding: '8px 0', borderBottom: '1px solid var(--border-color)'}}>
+                              <div className="info-line" style={{padding: 0, borderBottom: 'none'}}>
+                                <span>{h.data ? new Date(h.data).toLocaleDateString('pt-BR') : '—'}</span>
+                                <strong>{h.seiNumber || '—'}</strong>
+                              </div>
+                              {h.servidoresDesignados && <p className="card-text" style={{margin: '2px 0 0'}}>Servidor(es): {h.servidoresDesignados}</p>}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                      <div className="modal-actions">
+                        <button className="btn-secondary" onClick={() => setShowHearingsHistorico(false)}>Fechar</button>
+                      </div>
+                    </div>
                   </div>
                 )}
               </>
