@@ -83,6 +83,7 @@ export default function SistemaDespacho() {
   const [accompaniments, setAccompaniments] = useState([]);
   const [selectedProcess, setSelectedProcess] = useState(null);
   const [selectedAccompaniment, setSelectedAccompaniment] = useState(null);
+  const [acompSubTab, setAcompSubTab] = useState('gabinete'); // Gabinete ou ASSTEC, quando o usuário tem acesso aos dois
   const [showDiligenceModal, setShowDiligenceModal] = useState(false);
   const [diligenceText, setDiligenceText] = useState('');
   const [newProcessMode, setNewProcessMode] = useState(false);
@@ -143,6 +144,7 @@ export default function SistemaDespacho() {
   const DEFAULT_PUSH_CONFIG = {
     audiencias:      { master: false, secretario: false, chefe_gab: false, servidora: true,  estagiaria: true  },
     acompanhamentos: { master: false, secretario: true,  chefe_gab: true,  servidora: false, estagiaria: false },
+    acompanhamentosAsstec: { master: false, secretario: true, chefe_gab: true, servidora: false, estagiaria: false },
     doe:             { master: false, secretario: true,  chefe_gab: true,  servidora: false, estagiaria: false },
     prazos:          { master: true,  secretario: true,  chefe_gab: true,  servidora: true,  estagiaria: true  },
     despachoCriacao: { master: false, secretario: true,  chefe_gab: false, servidora: false, estagiaria: false },
@@ -163,10 +165,28 @@ export default function SistemaDespacho() {
     acc[t.id] = { master: true, secretario: true, chefe_gab: true, servidora: true, estagiaria: true };
     return acc;
   }, {});
+  // "acompanhamentos" (chave já existente) passa a representar o acesso ao
+  // Acompanhamento Gabinete; esta é a nova chave para o Acompanhamento ASSTEC.
+  DEFAULT_TAB_VISIBILITY.acompanhamentos_asstec = { master: true, secretario: true, chefe_gab: true, servidora: true, estagiaria: true };
   const [tabVisibility, setTabVisibility] = useState(DEFAULT_TAB_VISIBILITY);
 
-  // master sempre vê tudo; demais respeitam a configuração (default = visível)
-  const tabVisible = (tabId) => currentUser === 'master' || tabVisibility[tabId]?.[currentUser] !== false;
+  // master sempre vê tudo; demais respeitam a configuração (default = visível).
+  // "acompanhamentos" é especial: fica visível se o usuário tiver acesso a
+  // pelo menos um dos dois setores (Gabinete e/ou ASSTEC).
+  const tabVisible = (tabId) => {
+    if (currentUser === 'master') return true;
+    if (tabId === 'acompanhamentos') {
+      return tabVisibility.acompanhamentos?.[currentUser] !== false || tabVisibility.acompanhamentos_asstec?.[currentUser] !== false;
+    }
+    return tabVisibility[tabId]?.[currentUser] !== false;
+  };
+
+  // Acompanhamentos: quem tem acesso aos dois setores escolhe qual ver pelo
+  // toggle (acompSubTab); quem só tem um dos dois vê ele direto, sem toggle.
+  const canAcompGab = currentUser === 'master' || tabVisibility.acompanhamentos?.[currentUser] !== false;
+  const canAcompAsstec = currentUser === 'master' || tabVisibility.acompanhamentos_asstec?.[currentUser] !== false;
+  const acompEffectiveSetor = (canAcompGab && canAcompAsstec) ? acompSubTab : (canAcompGab ? 'gabinete' : 'asstec');
+  const accompFiltered = accompaniments.filter((acc) => (acc.setor || 'gabinete') === acompEffectiveSetor);
 
   // Permissões configuráveis pelo master (leitura/criação/edição/exclusão).
   // O default vem das permissões fixas em USUARIOS.
@@ -298,6 +318,70 @@ export default function SistemaDespacho() {
     return emailString.split(/[,;]/).map(e => e.trim()).filter(e => e && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
   };
 
+  // ─── Relatórios em PDF ──────────────────────────────────────────────────
+  // Gera um documento HTML autocontido numa aba nova e aciona a impressão do
+  // navegador (o usuário escolhe "Salvar como PDF"). Sem dependências novas.
+
+  const escapeHtml = (value) => String(value ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+  const REPORT_STYLES = `
+    @page { size: A4; margin: 16mm 15mm; }
+    * { box-sizing: border-box; }
+    body { font-family: 'Inter', Arial, sans-serif; color: #11152A; margin: 0; padding: 0; }
+    h1, h2, h3 { font-family: 'Lora', Georgia, serif; margin: 0; }
+    .report-header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #B5923E; padding-bottom: 12px; margin-bottom: 22px; }
+    .report-header h1 { font-size: 21px; color: #10152B; font-weight: 600; }
+    .report-header .subtitle { font-size: 11px; color: #4C5568; margin-top: 4px; }
+    .report-meta { text-align: right; font-size: 10px; color: #4C5568; line-height: 1.7; }
+    .report-item { border: 1px solid #E0E4EC; border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; page-break-inside: avoid; }
+    .report-item h3 { font-size: 14px; color: #223E68; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .report-field { margin-bottom: 8px; }
+    .report-field:last-child { margin-bottom: 0; }
+    .report-field .label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; color: #8C93A8; font-weight: 700; display: block; margin-bottom: 2px; }
+    .report-field .value { font-size: 12.5px; line-height: 1.65; text-align: justify; white-space: pre-wrap; }
+    .report-badge { display: inline-block; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; padding: 3px 9px; border-radius: 20px; background: #EDF0F5; color: #4C5568; }
+    .report-empty { text-align: center; color: #8C93A8; font-size: 13px; padding: 3rem 0; }
+    .report-footer { margin-top: 22px; padding-top: 10px; border-top: 1px solid #E0E4EC; font-size: 9px; color: #8C93A8; text-align: center; }
+  `;
+
+  const abrirRelatorioPdf = (titulo, corpoHtml, totalRegistros) => {
+    const win = window.open('', '_blank', 'width=960,height=720');
+    if (!win) { alert('Não foi possível abrir a janela do relatório. Permita pop-ups para este site e tente novamente.'); return; }
+    const agora = new Date().toLocaleString('pt-BR');
+    const autor = ALL_USERS[currentUser]?.nome || currentUser || '';
+    win.document.write(`<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8" />
+<title>${escapeHtml(titulo)} — ASSTEC</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Lora:wght@500;600;700&display=swap" rel="stylesheet">
+<style>${REPORT_STYLES}</style>
+</head><body>
+  <div class="report-header">
+    <div>
+      <h1>⚖️ ASSTEC — ${escapeHtml(titulo)}</h1>
+      <p class="subtitle">Sistema de Gestão Processual — SEMARH</p>
+    </div>
+    <div class="report-meta">
+      Gerado em ${escapeHtml(agora)}<br/>
+      Por ${escapeHtml(autor)}<br/>
+      ${totalRegistros} registro(s)
+    </div>
+  </div>
+  ${totalRegistros > 0 ? corpoHtml : '<p class="report-empty">Nenhum registro para exibir.</p>'}
+  <div class="report-footer">Relatório gerado automaticamente pelo Sistema de Despacho ASSTEC.</div>
+</body></html>`);
+    win.document.close();
+    win.focus();
+    let printed = false;
+    const doPrint = () => { if (printed || win.closed) return; printed = true; win.print(); };
+    if (win.document.fonts && win.document.fonts.ready) {
+      win.document.fonts.ready.then(doPrint).catch(doPrint);
+    }
+    setTimeout(doPrint, 900);
+  };
+
   // Urgência de um prazo fatal: usado no Painel e na lista de Prazos Judiciais.
   const prazoStatus = (prazoFatal) => {
     const daysLeft = Math.ceil((new Date(prazoFatal + 'T23:59:59') - new Date()) / (1000 * 60 * 60 * 24));
@@ -317,6 +401,85 @@ export default function SistemaDespacho() {
     const proxima = daysLeft > 3 && daysLeft <= 5;
     const cor = urgente ? 'var(--accent-hearing-urgent)' : proxima ? 'var(--accent-hearing-soon)' : null;
     return { daysLeft, urgente, proxima, cor };
+  };
+
+  const exportarDespachosPdf = () => {
+    const corpo = processes.map((p) => `
+      <div class="report-item">
+        <h3>${escapeHtml(p.numero)}
+          ${SETOR_POR_USUARIO[p.criadoPor] ? `<span class="report-badge">${escapeHtml(SETOR_POR_USUARIO[p.criadoPor])}</span>` : ''}
+          <span class="report-badge">${escapeHtml(p.status)}</span>
+        </h3>
+        <div class="report-field"><span class="label">Objeto</span><div class="value">${escapeHtml(p.objeto)}</div></div>
+        <div class="report-field"><span class="label">Parte Interessada</span><div class="value">${escapeHtml(p.parteInteressada || '—')}</div></div>
+        <div class="report-field"><span class="label">Data de Entrada</span><div class="value">${escapeHtml(p.dataEntrada || '—')}</div></div>
+        <div class="report-field"><span class="label">Análise Técnica</span><div class="value">${escapeHtml(p.analise || 'Sem análise')}</div></div>
+        ${p.despachado ? `<div class="report-field"><span class="label">Despacho</span><div class="value">Despachado em ${escapeHtml(p.dataDespacho)} — Decisão: ${escapeHtml(p.motivo)}</div></div>` : ''}
+        ${p.observacoes ? `<div class="report-field"><span class="label">Observações</span><div class="value">${escapeHtml(p.observacoes)}</div></div>` : ''}
+      </div>
+    `).join('');
+    abrirRelatorioPdf('Despachos de Gabinete', corpo, processes.length);
+  };
+
+  const exportarAcompanhamentosPdf = () => {
+    const tituloSetor = acompEffectiveSetor === 'asstec' ? 'ASSTEC' : 'Gabinete';
+    const corpo = accompFiltered.map((acc) => `
+      <div class="report-item">
+        <h3>${escapeHtml(acc.numeroProcesso)}</h3>
+        <div class="report-field"><span class="label">Objeto</span><div class="value">${escapeHtml(acc.objeto)}</div></div>
+        <div class="report-field"><span class="label">Setor Anterior</span><div class="value">${escapeHtml(acc.setorAnterior || '—')}${acc.dataSetorAnterior ? ` (${escapeHtml(acc.dataSetorAnterior)})` : ''}</div></div>
+        <div class="report-field"><span class="label">Setor Atual</span><div class="value">${escapeHtml(acc.setorAtual || '—')}${acc.dataSetorAtual ? ` (${escapeHtml(acc.dataSetorAtual)})` : ''}</div></div>
+        <div class="report-field"><span class="label">Status</span><div class="value">${escapeHtml(acc.status || '—')}</div></div>
+        <div class="report-field"><span class="label">Última Movimentação</span><div class="value">${escapeHtml(acc.dataUltimaEdicao || '—')}</div></div>
+        <div class="report-field"><span class="label">Última Verificação</span><div class="value">${escapeHtml(acc.dataUltimaVerificacao || '—')}</div></div>
+      </div>
+    `).join('');
+    abrirRelatorioPdf(`Acompanhamento ${tituloSetor}`, corpo, accompFiltered.length);
+  };
+
+  const exportarAudienciasPdf = () => {
+    const lista = [...hearings].sort((a, b) => new Date(a.data) - new Date(b.data));
+    const corpo = lista.map((h) => `
+      <div class="report-item">
+        <h3>${escapeHtml(h.seiNumber)}
+          <span class="report-badge">${h.data ? new Date(h.data).toLocaleDateString('pt-BR') : '—'}${h.hora ? ` às ${escapeHtml(h.hora)}` : ''}</span>
+        </h3>
+        <div class="report-field"><span class="label">Objeto</span><div class="value">${escapeHtml(h.objeto || '—')}</div></div>
+        <div class="report-field"><span class="label">Setor Responsável</span><div class="value">${escapeHtml(h.setorResponsavel || '—')}</div></div>
+        <div class="report-field"><span class="label">Servidores Designados</span><div class="value">${escapeHtml(h.servidoresDesignados || '—')}</div></div>
+        ${h.linkSessao ? `<div class="report-field"><span class="label">Link da Sessão</span><div class="value">${escapeHtml(h.linkSessao)}</div></div>` : ''}
+      </div>
+    `).join('');
+    abrirRelatorioPdf('Audiências', corpo, lista.length);
+  };
+
+  const exportarPrazosPdf = () => {
+    const lista = [...deadlines].sort((a, b) => new Date(a.prazoFatal) - new Date(b.prazoFatal));
+    const corpo = lista.map((dl) => {
+      const st = prazoStatus(dl.prazoFatal);
+      return `
+      <div class="report-item">
+        <h3>${escapeHtml(dl.numeroPJE || dl.numeroSEI || '—')} <span class="report-badge">${escapeHtml(st.label)}</span></h3>
+        ${dl.numeroPJE ? `<div class="report-field"><span class="label">Número PJE</span><div class="value">${escapeHtml(dl.numeroPJE)}</div></div>` : ''}
+        ${dl.numeroSEI ? `<div class="report-field"><span class="label">Número SEI</span><div class="value">${escapeHtml(dl.numeroSEI)}</div></div>` : ''}
+        <div class="report-field"><span class="label">Prazo Fatal</span><div class="value">${dl.prazoFatal ? new Date(dl.prazoFatal).toLocaleDateString('pt-BR') : '—'}</div></div>
+        <div class="report-field"><span class="label">Tipo de Prazo</span><div class="value">${dl.tipoPrazo === 'curto' ? 'Curto (5–10 dias)' : 'Longo'}</div></div>
+        ${dl.objeto ? `<div class="report-field"><span class="label">Objeto</span><div class="value">${escapeHtml(dl.objeto)}</div></div>` : ''}
+      </div>`;
+    }).join('');
+    abrirRelatorioPdf('Prazos Judiciais', corpo, lista.length);
+  };
+
+  const exportarDoePdf = () => {
+    const lista = [...doePublications].sort((a, b) => new Date(b.dataPublicacao) - new Date(a.dataPublicacao));
+    const corpo = lista.map((d) => `
+      <div class="report-item">
+        <h3>Diário #${escapeHtml(d.numeroDiario || 'S/N')} <span class="report-badge">${d.dataPublicacao ? new Date(d.dataPublicacao).toLocaleDateString('pt-BR') : '—'}</span></h3>
+        ${d.dataDisponibilizacao ? `<div class="report-field"><span class="label">Data de Disponibilização</span><div class="value">${new Date(d.dataDisponibilizacao).toLocaleDateString('pt-BR')}</div></div>` : ''}
+        <div class="report-field"><span class="label">Conteúdo</span><div class="value">${formatDoeContent(d.conteudo || '')}</div></div>
+      </div>
+    `).join('');
+    abrirRelatorioPdf('DOE/PI — Publicações', corpo, lista.length);
   };
 
   // ─── Segurança: hash de senha (SHA-256) ────────────────────────────────────
@@ -383,8 +546,11 @@ export default function SistemaDespacho() {
             if (data.doeEmails) setDoeEmails(data.doeEmails);
             if (data.accompEmails) setAccompEmails(data.accompEmails);
             if (data.userPasswords) setUserPasswords(data.userPasswords);
-            if (data.pushNotifConfig) setPushNotifConfig(data.pushNotifConfig);
-            if (data.tabVisibility) setTabVisibility(data.tabVisibility);
+            // Mescla com os defaults locais para que chaves novas (ex.: recém-criadas
+            // pelo código, como as de Acompanhamento ASSTEC) já venham com um valor
+            // sensato antes mesmo do master salvar algo nas configurações.
+            if (data.pushNotifConfig) setPushNotifConfig({ ...DEFAULT_PUSH_CONFIG, ...data.pushNotifConfig });
+            if (data.tabVisibility) setTabVisibility({ ...DEFAULT_TAB_VISIBILITY, ...data.tabVisibility });
             if (data.userPermissions) setUserPermissions(data.userPermissions);
             if (data.userEmails) setUserEmails(data.userEmails);
             if (data.emailRegistered) setEmailRegistered(data.emailRegistered);
@@ -777,13 +943,13 @@ export default function SistemaDespacho() {
 
   const deleteProcess = async (id) => { await deleteDoc(doc(db, 'processos', id)); setSelectedProcess(null); };
 
-  const createNewAccompaniment = async () => {
+  const createNewAccompaniment = async (setor) => {
     if (!newAccompaniment.objeto || !newAccompaniment.numeroProcesso) { alert('Preencha campos obrigatórios'); return; }
     if (loading) return;
     setLoading(true);
     try {
       await addDoc(collection(db, 'acompanhamentos'), {
-        ...newAccompaniment, dataUltimaEdicao: new Date().toISOString().split('T')[0], verificacaoAtualizada: false
+        ...newAccompaniment, setor: setor || 'gabinete', dataUltimaEdicao: new Date().toISOString().split('T')[0], verificacaoAtualizada: false
       });
       setNewAccompaniment({ objeto: '', numeroProcesso: '', setorAnterior: '', dataSetorAnterior: '', setorAtual: '', dataSetorAtual: '', status: '' });
       setNewAccompanimentMode(false);
@@ -811,10 +977,11 @@ export default function SistemaDespacho() {
       .map(([key, value]) => `${fieldLabels[key] || key}: ${value || '(vazio)'}`)
       .join(' • ');
 
-    if (notifEnabled('acompanhamentos')) {
+    const acompCategory = newSelected.setor === 'asstec' ? 'acompanhamentosAsstec' : 'acompanhamentos';
+    if (notifEnabled(acompCategory)) {
       addBanner(`📍 ${newSelected.numeroProcesso} atualizado`, 'info');
     }
-    createNotification('acompanhamentos', {
+    createNotification(acompCategory, {
       title: '📍 Nova movimentação',
       icon: '📍',
       main: `Processo ${newSelected.numeroProcesso}`,
@@ -840,11 +1007,12 @@ export default function SistemaDespacho() {
     setSelectedAccompaniment((prev) => (prev && prev.id === id ? { ...prev, verificacaoAtualizada: true, dataUltimaVerificacao: hoje } : prev));
   };
 
-  // Verifica todos os acompanhamentos de uma vez (botão "Verificar todos os processos")
-  const verifyAllAccompaniments = async () => {
-    if (accompaniments.length === 0) { alert('Nenhum acompanhamento cadastrado.'); return; }
-    if (!window.confirm(`Marcar verificação atualizada para todos os ${accompaniments.length} acompanhamentos?`)) return;
-    await Promise.all(accompaniments.map((acc) => markVerified(acc.id)));
+  // Verifica todos os acompanhamentos de uma vez (botão "Verificar todos os processos").
+  // Recebe a lista já filtrada pelo setor (Gabinete/ASSTEC) em exibição.
+  const verifyAllAccompaniments = async (list) => {
+    if (list.length === 0) { alert('Nenhum acompanhamento cadastrado.'); return; }
+    if (!window.confirm(`Marcar verificação atualizada para todos os ${list.length} acompanhamentos?`)) return;
+    await Promise.all(list.map((acc) => markVerified(acc.id)));
     if (selectedAccompaniment) await updateVerification(selectedAccompaniment.id);
     alert('Verificação atualizada para todos os processos.');
   };
@@ -1485,6 +1653,7 @@ export default function SistemaDespacho() {
                 .sort((a, b) => new Date(a.data) - new Date(b.data));
               const limiteMovimentacao = new Date(); limiteMovimentacao.setDate(limiteMovimentacao.getDate() - dashboardConfig.diasAcompanhamento);
               const acompanhamentosMovimentados = [...accompaniments]
+                .filter((acc) => (canAcompGab && (acc.setor || 'gabinete') === 'gabinete') || (canAcompAsstec && acc.setor === 'asstec'))
                 .filter((acc) => acc.dataUltimaEdicao && new Date(acc.dataUltimaEdicao) >= limiteMovimentacao)
                 .sort((a, b) => new Date(b.dataUltimaEdicao) - new Date(a.dataUltimaEdicao));
 
@@ -1674,7 +1843,10 @@ export default function SistemaDespacho() {
                   <div className="list-view">
                     <div className="list-header">
                       <h3>Despachos de Gabinete</h3>
-                      {can('criar') && (<button className="btn-new" onClick={() => setNewProcessMode(true)}>+ Novo Despacho</button>)}
+                      <div className="header-buttons">
+                        <button className="btn-settings" onClick={exportarDespachosPdf}>🖨️ Exportar PDF</button>
+                        {can('criar') && (<button className="btn-new" onClick={() => setNewProcessMode(true)}>+ Novo Despacho</button>)}
+                      </div>
                     </div>
                     {processes.length === 0 ? (<p className="empty-state">Nenhum processo</p>) : (
                       processes.map(process => (
@@ -1715,6 +1887,16 @@ export default function SistemaDespacho() {
 
             {activeTab === 'acompanhamentos' && (
               <>
+                {!newAccompanimentMode && !selectedAccompaniment && canAcompGab && canAcompAsstec && (
+                  <div className="view-toggle-group">
+                    <button className={`btn-settings ${acompSubTab === 'gabinete' ? 'active' : ''}`} onClick={() => setAcompSubTab('gabinete')}>
+                      🏛️ Gabinete
+                    </button>
+                    <button className={`btn-settings ${acompSubTab === 'asstec' ? 'active' : ''}`} onClick={() => setAcompSubTab('asstec')}>
+                      🌳 ASSTEC
+                    </button>
+                  </div>
+                )}
                 {newAccompanimentMode ? (
                   <div className="form-card">
                     <h3>Novo Acompanhamento</h3>
@@ -1732,7 +1914,7 @@ export default function SistemaDespacho() {
                     </div>
                     <div className="form-group"><label>Status</label><textarea placeholder="Descreva..." value={newAccompaniment.status} onChange={(e) => setNewAccompaniment({...newAccompaniment, status: e.target.value})} /></div>
                     <div className="form-actions">
-                      <button className="btn-primary" onClick={createNewAccompaniment} disabled={loading}>{loading ? 'Salvando...' : 'Criar'}</button>
+                      <button className="btn-primary" onClick={() => createNewAccompaniment(acompEffectiveSetor)} disabled={loading}>{loading ? 'Salvando...' : 'Criar'}</button>
                       <button className="btn-secondary" disabled={loading} onClick={() => {setNewAccompanimentMode(false); setNewAccompaniment({ objeto: '', numeroProcesso: '', setorAnterior: '', dataSetorAnterior: '', setorAtual: '', dataSetorAtual: '', status: '' });}}>Cancelar</button>
                     </div>
                   </div>
@@ -1791,10 +1973,11 @@ export default function SistemaDespacho() {
                 ) : (
                   <div className="list-view">
                     <div className="list-header">
-                      <h3>Acompanhamentos Especiais</h3>
+                      <h3>{canAcompGab && canAcompAsstec ? 'Acompanhamentos Especiais' : `Acompanhamento ${acompEffectiveSetor === 'asstec' ? 'ASSTEC' : 'Gabinete'}`}</h3>
                       <div className="header-buttons">
+                        <button className="btn-settings" onClick={exportarAcompanhamentosPdf}>🖨️ Exportar PDF</button>
                         <button className="btn-settings" onClick={() => setShowAccompEmailModal(!showAccompEmailModal)}>⚙️ Emails</button>
-                        <button className="btn-verify" onClick={verifyAllAccompaniments}>✓ Verificar todos os processos</button>
+                        <button className="btn-verify" onClick={() => verifyAllAccompaniments(accompFiltered)}>✓ Verificar todos os processos</button>
                         <button className="btn-new" onClick={() => setNewAccompanimentMode(true)}>+ Novo</button>
                       </div>
                     </div>
@@ -1813,8 +1996,8 @@ export default function SistemaDespacho() {
                         </div>
                       </div>
                     )}
-                    {accompaniments.length === 0 ? (<p className="empty-state">Nenhum acompanhamento</p>) : (
-                      accompaniments.map(acc => (
+                    {accompFiltered.length === 0 ? (<p className="empty-state">Nenhum acompanhamento</p>) : (
+                      accompFiltered.map(acc => (
                         <div key={acc.id} onClick={() => { setSelectedAccompaniment(acc); setAccompEdits({}); }} className="card-item">
                           <div className="card-top"><strong>{acc.numeroProcesso}</strong></div>
                           <p className="card-text"><strong>Objeto:</strong> {acc.objeto}</p>
@@ -1937,7 +2120,13 @@ export default function SistemaDespacho() {
                   />
                 ) : (
                   <div className="list-view">
-                    <div className="list-header"><h3>Audiências</h3><button className="btn-new" onClick={() => setNewHearingMode(true)}>+ Nova</button></div>
+                    <div className="list-header">
+                      <h3>Audiências</h3>
+                      <div className="header-buttons">
+                        <button className="btn-settings" onClick={exportarAudienciasPdf}>🖨️ Exportar PDF</button>
+                        <button className="btn-new" onClick={() => setNewHearingMode(true)}>+ Nova</button>
+                      </div>
+                    </div>
                     {hearings.length === 0 ? (<p className="empty-state">Nenhuma audiência</p>) : (
                       hearings.sort((a, b) => new Date(a.data) - new Date(b.data)).map(hearing => {
                         const hs = hearingStatus(hearing.data);
@@ -2021,6 +2210,7 @@ export default function SistemaDespacho() {
                     <div className="list-header">
                       <h3>DOE/PI</h3>
                       <div className="header-buttons">
+                        <button className="btn-settings" onClick={exportarDoePdf}>🖨️ Exportar PDF</button>
                         <button className="btn-settings" onClick={() => setShowDoeEmailModal(!showDoeEmailModal)}>⚙️ Emails</button>
                         <button className="btn-new" onClick={() => setNewDoeMode(true)}>+ Nova Publicação</button>
                       </div>
@@ -2100,7 +2290,10 @@ export default function SistemaDespacho() {
                   <div className="list-view">
                     <div className="list-header">
                       <h3>Controle de Prazos Judiciais</h3>
-                      {can('criar') && (<button className="btn-new" onClick={() => setNewDeadlineMode(true)}>+ Novo Prazo</button>)}
+                      <div className="header-buttons">
+                        <button className="btn-settings" onClick={exportarPrazosPdf}>🖨️ Exportar PDF</button>
+                        {can('criar') && (<button className="btn-new" onClick={() => setNewDeadlineMode(true)}>+ Novo Prazo</button>)}
+                      </div>
                     </div>
                     {deadlines.length === 0 ? (<p className="empty-state">Nenhum prazo cadastrado</p>) : (
                       [...deadlines].sort((a, b) => new Date(a.prazoFatal) - new Date(b.prazoFatal)).map(dl => {
@@ -2272,7 +2465,13 @@ export default function SistemaDespacho() {
                       <p style={{fontSize:'12px', color:'var(--text-secondary)', marginBottom:'1rem', lineHeight:'1.5'}}>
                         Marque quais usuários podem <strong>visualizar</strong> cada aba. O usuário master sempre vê todas.
                       </p>
-                      {TABS.map((tab) => (
+                      {TABS.flatMap((tab) => tab.id === 'acompanhamentos'
+                        ? [
+                            { id: 'acompanhamentos', label: 'Acompanhamento Gabinete', icon: 'ti-map-pin' },
+                            { id: 'acompanhamentos_asstec', label: 'Acompanhamento ASSTEC', icon: 'ti-building' },
+                          ]
+                        : [tab]
+                      ).map((tab) => (
                         <div key={tab.id} className="push-config-block">
                           <div className="push-config-title">
                             <strong><i className={`ti ${tab.icon}`} style={{marginRight:'6px'}}></i>{tab.label}</strong>
@@ -2318,7 +2517,8 @@ export default function SistemaDespacho() {
                       </p>
                       {[
                         { key: 'audiencias',      label: 'Audiências', icon: 'ti-calendar-event', desc: '5 e 1 dia antes' },
-                        { key: 'acompanhamentos', label: 'Acompanhamentos', icon: 'ti-map-pin', desc: 'quando atualizado' },
+                        { key: 'acompanhamentos', label: 'Acompanhamento Gabinete', icon: 'ti-map-pin', desc: 'quando atualizado' },
+                        { key: 'acompanhamentosAsstec', label: 'Acompanhamento ASSTEC', icon: 'ti-building', desc: 'quando atualizado' },
                         { key: 'doe',             label: 'DOE/PI', icon: 'ti-news', desc: 'nova publicação' },
                         { key: 'prazos',          label: 'Prazos Judiciais', icon: 'ti-scale', desc: '10, 5, 3 e 2 dias antes' },
                         { key: 'despachoCriacao', label: 'Despachos — Criação', icon: 'ti-gavel', desc: 'quando um novo despacho é criado' },
