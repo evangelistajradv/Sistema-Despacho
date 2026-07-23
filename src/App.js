@@ -9,7 +9,7 @@ import {
   signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, updatePassword,
   EmailAuthProvider, reauthenticateWithCredential, setPersistence,
   browserLocalPersistence, browserSessionPersistence, onAuthStateChanged, sendPasswordResetEmail,
-  GoogleAuthProvider, signInWithPopup,
+  GoogleAuthProvider, signInWithPopup, signInAnonymously,
 } from 'firebase/auth';
 import NotificationCenter from './NotificationCenter';
 import NotificationBanner from './NotificationBanner';
@@ -57,6 +57,11 @@ const DEFAULT_DASHBOARD_CONFIG = {
 export default function SistemaDespacho() {
   const [authenticated, setAuthenticated] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
+  const [publicViewer, setPublicViewer] = useState(false); // Consulta Pública ao DOE/PI (login anônimo, somente leitura)
+  const [publicDoe, setPublicDoe] = useState([]);
+  const [publicDoeSelected, setPublicDoeSelected] = useState(null);
+  const [publicAccessError, setPublicAccessError] = useState('');
+  const [publicAccessLoading, setPublicAccessLoading] = useState(false);
   const [loginUser, setLoginUser] = useState('master');
   const [loginPass, setLoginPass] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
@@ -114,7 +119,7 @@ export default function SistemaDespacho() {
   });
 
   const [newProcess, setNewProcess] = useState({ numero: '', objeto: '', parteInteressada: '', analise: '' });
-  const NEW_ACCOMPANIMENT_DEFAULT = { objeto: '', numeroProcesso: '', setorAnterior: '', dataSetorAnterior: '', setorAtual: '', dataSetorAtual: '', status: '', lembreteAtivo: false, lembreteDias: '', lembreteConteudo: '' };
+  const NEW_ACCOMPANIMENT_DEFAULT = { objeto: '', numeroProcesso: '', setorAnterior: '', dataSetorAnterior: '', setorAtual: '', dataSetorAtual: '', status: '', lembreteAtivo: false, lembreteDias: '', lembreteConteudo: '', espelhar: false };
   const [newAccompaniment, setNewAccompaniment] = useState(NEW_ACCOMPANIMENT_DEFAULT);
   const LEMBRETE_TEXTO_PADRAO = 'Verificação de demanda e eventuais atualizações';
   const [newHearing, setNewHearing] = useState({ seiNumber: '', data: '', hora: '', objeto: '', linkSessao: '', setorResponsavel: '', servidoresDesignados: '', emailsNotificacao: '' });
@@ -190,7 +195,7 @@ export default function SistemaDespacho() {
   const canAcompGab = currentUser === 'master' || tabVisibility.acompanhamentos?.[currentUser] !== false;
   const canAcompAsstec = currentUser === 'master' || tabVisibility.acompanhamentos_asstec?.[currentUser] !== false;
   const acompEffectiveSetor = (canAcompGab && canAcompAsstec) ? acompSubTab : (canAcompGab ? 'gabinete' : 'asstec');
-  const accompFiltered = accompaniments.filter((acc) => (acc.setor || 'gabinete') === acompEffectiveSetor);
+  const accompFiltered = accompaniments.filter((acc) => (acc.visivelEm || [acc.setor || 'gabinete']).includes(acompEffectiveSetor));
 
   // Permissões configuráveis pelo master (leitura/criação/edição/exclusão).
   // O default vem das permissões fixas em USUARIOS.
@@ -438,7 +443,7 @@ export default function SistemaDespacho() {
     const tituloSetor = acompEffectiveSetor === 'asstec' ? 'ASSTEC' : 'Gabinete';
     const corpo = accompFiltered.map((acc) => `
       <div class="report-item">
-        <h3>${escapeHtml(acc.numeroProcesso)}</h3>
+        <h3>${escapeHtml(acc.numeroProcesso)} ${(acc.visivelEm && acc.visivelEm.length > 1) ? '<span class="report-badge">🪞 Espelhado (Gabinete e ASSTEC)</span>' : ''}</h3>
         <div class="report-field"><span class="label">Objeto</span><div class="value">${escapeHtml(acc.objeto)}</div></div>
         <div class="report-field"><span class="label">Setor Anterior</span><div class="value">${escapeHtml(acc.setorAnterior || '—')}${acc.dataSetorAnterior ? ` (${escapeHtml(acc.dataSetorAnterior)})` : ''}</div></div>
         <div class="report-field"><span class="label">Setor Atual</span><div class="value">${escapeHtml(acc.setorAtual || '—')}${acc.dataSetorAtual ? ` (${escapeHtml(acc.dataSetorAtual)})` : ''}</div></div>
@@ -623,6 +628,18 @@ export default function SistemaDespacho() {
 
     return () => { unsubProcesses(); unsubAcc(); unsubHearings(); unsubHearingsHist(); unsubDoe(); unsubDeadlines(); };
   }, [authenticated]);
+
+  // Consulta Pública: assina só a coleção do DOE/PI, independente do login
+  // normal (o visitante nunca fica "authenticated" nem vê o resto do sistema).
+  useEffect(() => {
+    if (!publicViewer) return;
+    const unsub = onSnapshot(
+      collection(db, 'doe'),
+      (snap) => { setPublicDoe(snap.docs.map(d => ({ id: d.id, ...d.data() }))); },
+      (err) => { console.error('❌ Erro DOE (consulta pública):', err.message); }
+    );
+    return () => unsub();
+  }, [publicViewer]);
 
   // Arquivamento automático de audiências antigas: quando uma audiência já
   // ocorreu há mais de 30 dias, guarda só data + número do processo em
@@ -937,6 +954,29 @@ export default function SistemaDespacho() {
     setAuthenticated(false); setCurrentUser(null); setLoginPass('');
   };
 
+  // ─── Consulta Pública (Diário Oficial) ──────────────────────────────────
+  // Acesso direto pela tela de login, sem usuário/senha: entra com uma sessão
+  // anônima do Firebase (só enxerga o DOE/PI, e só para leitura).
+  const handlePublicAccess = async () => {
+    setPublicAccessError('');
+    setPublicAccessLoading(true);
+    try {
+      await signInAnonymously(auth);
+      setPublicViewer(true);
+    } catch (e) {
+      console.error('❌ Erro ao acessar consulta pública:', e.message);
+      setPublicAccessError('Não foi possível abrir a consulta pública agora. Tente novamente em instantes.');
+    } finally {
+      setPublicAccessLoading(false);
+    }
+  };
+
+  const handleExitPublicViewer = () => {
+    signOut(auth).catch(() => {});
+    setPublicViewer(false);
+    setPublicDoeSelected(null);
+  };
+
   const can = (action) => {
     if (!currentUser) return false;
     if (currentUser === 'master') return true; // master tem acesso total
@@ -998,6 +1038,8 @@ export default function SistemaDespacho() {
     try {
       const hoje = new Date().toISOString().split('T')[0];
       const lembreteAtivo = newAccompaniment.lembreteAtivo && Number(newAccompaniment.lembreteDias) > 0;
+      const setorFinal = setor || 'gabinete';
+      const visivelEm = newAccompaniment.espelhar ? ['gabinete', 'asstec'] : [setorFinal];
       await addDoc(collection(db, 'acompanhamentos'), {
         ...newAccompaniment,
         lembreteAtivo,
@@ -1005,7 +1047,8 @@ export default function SistemaDespacho() {
         lembreteConteudo: lembreteAtivo ? newAccompaniment.lembreteConteudo : '',
         lembreteCriadoEm: lembreteAtivo ? hoje : null,
         lembreteEnviado: false,
-        setor: setor || 'gabinete', dataUltimaEdicao: hoje, verificacaoAtualizada: false
+        visivelEm,
+        setor: setorFinal, dataUltimaEdicao: hoje, verificacaoAtualizada: false
       });
       setNewAccompaniment(NEW_ACCOMPANIMENT_DEFAULT);
       setNewAccompanimentMode(false);
@@ -1033,18 +1076,23 @@ export default function SistemaDespacho() {
       .map(([key, value]) => `${fieldLabels[key] || key}: ${value || '(vazio)'}`)
       .join(' • ');
 
-    const acompCategory = newSelected.setor === 'asstec' ? 'acompanhamentosAsstec' : 'acompanhamentos';
-    if (notifEnabled(acompCategory)) {
+    // Acompanhamento espelhado (visível nos dois setores) notifica as duas audiências.
+    const visivelEm = newSelected.visivelEm || [newSelected.setor || 'gabinete'];
+    const acompCategorias = [
+      ...(visivelEm.includes('gabinete') ? ['acompanhamentos'] : []),
+      ...(visivelEm.includes('asstec') ? ['acompanhamentosAsstec'] : []),
+    ];
+    if (acompCategorias.some((cat) => notifEnabled(cat))) {
       addBanner(`📍 ${newSelected.numeroProcesso} atualizado`, 'info');
     }
-    createNotification(acompCategory, {
+    acompCategorias.forEach((cat) => createNotification(cat, {
       title: '📍 Nova movimentação',
       icon: '📍',
       main: `Processo ${newSelected.numeroProcesso}`,
       secondary: changedFields.substring(0, 120),
       tab: 'acompanhamentos',
       itemId: newSelected.id,
-    });
+    }));
   };
 
   const notifEnabled = (type) => pushNotifConfig[type]?.[currentUser] !== false;
@@ -1518,18 +1566,22 @@ export default function SistemaDespacho() {
         try {
           // marca o flag primeiro (evita duplicidade entre dispositivos)
           await updateDoc(doc(db, 'acompanhamentos', acc.id), { lembreteEnviado: true });
-          const categoria = acc.setor === 'asstec' ? 'acompanhamentosAsstec' : 'acompanhamentos';
-          if (notifEnabled(categoria)) {
+          const visivelEm = acc.visivelEm || [acc.setor || 'gabinete'];
+          const categorias = [
+            ...(visivelEm.includes('gabinete') ? ['acompanhamentos'] : []),
+            ...(visivelEm.includes('asstec') ? ['acompanhamentosAsstec'] : []),
+          ];
+          if (categorias.some((cat) => notifEnabled(cat))) {
             addBanner(`🔔 Lembrete: ${acc.numeroProcesso}`, 'warning');
           }
-          createNotification(categoria, {
+          categorias.forEach((cat) => createNotification(cat, {
             title: '🔔 Lembrete de Acompanhamento',
             icon: '🔔',
             main: `Processo ${acc.numeroProcesso}`,
             secondary: (acc.lembreteConteudo || LEMBRETE_TEXTO_PADRAO).substring(0, 120),
             tab: 'acompanhamentos',
             itemId: acc.id,
-          });
+          }));
         } catch (e) { console.warn('⚠️ Erro ao marcar lembrete enviado:', e.message); }
       }
     };
@@ -1587,6 +1639,95 @@ export default function SistemaDespacho() {
       }
     }
   };
+
+  if (publicViewer) {
+    return (
+      <div className="app-container">
+        <aside className="sidebar">
+          <div className="sidebar-header">
+            <div className="logo-btn" style={{cursor: 'default'}}>
+              <span className="logo-icon"><i className="ti ti-scale"></i></span>
+              <div className="logo-text"><h2>ASSTEC</h2><p>Consulta Pública</p></div>
+            </div>
+          </div>
+          <nav className="sidebar-nav">
+            <button className="nav-item active">
+              <span className="icon"><i className="ti ti-news"></i></span><span className="label">DOE/PI</span>
+            </button>
+          </nav>
+          <div className="sidebar-footer">
+            <div className="user-info" data-initial="V">
+              <p className="user-name">Visitante</p>
+              <p className="user-role">Consulta pública</p>
+            </div>
+            <div className="sidebar-actions">
+              <button className="btn-icon" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title="Alternar tema"><i className={`ti ${theme === 'light' ? 'ti-moon' : 'ti-sun'}`}></i></button>
+              <button className="btn-icon btn-logout" onClick={handleExitPublicViewer} title="Sair"><i className="ti ti-logout"></i></button>
+            </div>
+          </div>
+        </aside>
+
+        <div className="main-wrapper">
+          <main className="main-content">
+            <div className="content-area">
+              {publicDoeSelected ? (
+                <div className="detail-card">
+                  <button className="back-button" onClick={() => setPublicDoeSelected(null)}>← Voltar</button>
+                  <div className="card-header"><h2>Diário #{publicDoeSelected.numeroDiario || 'S/N'}</h2></div>
+                  <div className="info-grid">
+                    <div className="info-item"><label>Data Publicação</label><p>{publicDoeSelected.dataPublicacao}</p></div>
+                    <div className="info-item"><label>Data Disponibilização</label><p>{publicDoeSelected.dataDisponibilizacao || 'N/A'}</p></div>
+                  </div>
+                  <div className="info-box">
+                    <label>Conteúdo</label>
+                    <div className="doe-content" dangerouslySetInnerHTML={{ __html: formatDoeContent(publicDoeSelected.conteudo) }} />
+                  </div>
+                  {publicDoeSelected.pdfUrl && (
+                    <div className="info-box">
+                      <label>📎 DOE em PDF</label>
+                      <div className="attachments">
+                        <div className="attachment-item">
+                          <a href={publicDoeSelected.pdfUrl} target="_blank" rel="noopener noreferrer" className="attachment-link">
+                            <i className="ti ti-file-type-pdf"></i><span>{publicDoeSelected.pdfNome || 'DOE.pdf'}</span>
+                          </a>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {(publicDoeSelected.documentos || []).length > 0 && (
+                    <div className="attachments">
+                      {publicDoeSelected.documentos.map((d, i) => (
+                        <div key={i} className="attachment-item">
+                          <a href={d.url} target="_blank" rel="noopener noreferrer" className="attachment-link">
+                            <i className="ti ti-file-type-pdf"></i><span>{d.nome}</span>
+                          </a>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="list-view">
+                  <div className="list-header"><h3>DOE/PI — Consulta Pública</h3></div>
+                  {publicDoe.length === 0 ? (<p className="empty-state">Nenhuma publicação disponível</p>) : (
+                    [...publicDoe].sort((a, b) => new Date(b.dataPublicacao) - new Date(a.dataPublicacao)).map((doe) => (
+                      <div key={doe.id} onClick={() => setPublicDoeSelected(doe)} className="card-item">
+                        <div className="card-top">
+                          <strong>Diário #{doe.numeroDiario || 'S/N'}</strong>
+                          <span className="badge">{doe.dataPublicacao ? new Date(doe.dataPublicacao).toLocaleDateString('pt-BR') : '—'}</span>
+                        </div>
+                        <p className="doe-preview" dangerouslySetInnerHTML={{ __html: formatDoeContent(doe.conteudo || '') }} />
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+          </main>
+        </div>
+      </div>
+    );
+  }
 
   if (!authenticated) {
     if (!authChecked || !configLoaded) {
@@ -1679,6 +1820,11 @@ export default function SistemaDespacho() {
             Esqueci minha senha
           </button>
           {forgotMsg && <p className="login-footer">{forgotMsg}</p>}
+          <div className="login-divider"><span>ou</span></div>
+          <button type="button" className="link-btn" style={{width:'100%', justifyContent:'center'}} onClick={handlePublicAccess} disabled={publicAccessLoading}>
+            <i className="ti ti-news"></i> {publicAccessLoading ? 'Abrindo...' : 'Consulta Pública ao Diário Oficial'}
+          </button>
+          {publicAccessError && <p className="login-footer" style={{color:'var(--accent-red)'}}>{publicAccessError}</p>}
         </form>
       </div>
     );
@@ -1742,7 +1888,10 @@ export default function SistemaDespacho() {
                 .sort((a, b) => new Date(a.data) - new Date(b.data));
               const limiteMovimentacao = new Date(); limiteMovimentacao.setDate(limiteMovimentacao.getDate() - dashboardConfig.diasAcompanhamento);
               const acompanhamentosMovimentados = [...accompaniments]
-                .filter((acc) => (canAcompGab && (acc.setor || 'gabinete') === 'gabinete') || (canAcompAsstec && acc.setor === 'asstec'))
+                .filter((acc) => {
+                  const vis = acc.visivelEm || [acc.setor || 'gabinete'];
+                  return (canAcompGab && vis.includes('gabinete')) || (canAcompAsstec && vis.includes('asstec'));
+                })
                 .filter((acc) => acc.dataUltimaEdicao && new Date(acc.dataUltimaEdicao) >= limiteMovimentacao)
                 .sort((a, b) => new Date(b.dataUltimaEdicao) - new Date(a.dataUltimaEdicao));
 
@@ -1992,6 +2141,17 @@ export default function SistemaDespacho() {
                       <div className="form-group"><label>Data</label><input type="date" value={newAccompaniment.dataSetorAtual} onChange={(e) => setNewAccompaniment({...newAccompaniment, dataSetorAtual: e.target.value})} /></div>
                     </div>
                     <div className="form-group"><label>Status</label><textarea placeholder="Descreva..." value={newAccompaniment.status} onChange={(e) => setNewAccompaniment({...newAccompaniment, status: e.target.value})} /></div>
+                    <div className="info-box" style={{marginTop: '0.5rem'}}>
+                      <label>🪞 Espelhar acompanhamento</label>
+                      <div style={{display: 'flex', alignItems: 'center', gap: '8px', margin: '0.6rem 0 0'}}>
+                        <input type="checkbox" id="espelhar-novo" checked={newAccompaniment.espelhar}
+                          onChange={(e) => setNewAccompaniment({...newAccompaniment, espelhar: e.target.checked})}
+                          style={{width: '16px', height: '16px', cursor: 'pointer'}} />
+                        <label htmlFor="espelhar-novo" style={{margin: 0, cursor: 'pointer', textTransform: 'none', fontSize: '13px', fontWeight: 600, opacity: 1}}>
+                          Este processo também deve ser acompanhado pel{acompEffectiveSetor === 'asstec' ? 'o Gabinete' : 'a ASSTEC'} (aparece nos dois)
+                        </label>
+                      </div>
+                    </div>
                     {acompEffectiveSetor === 'asstec' && (
                       <div className="info-box" style={{marginTop: '0.5rem'}}>
                         <label>🔔 Lembrete (opcional)</label>
@@ -2067,6 +2227,24 @@ export default function SistemaDespacho() {
                         value={accompEdits.status ?? selectedAccompaniment.status}
                         onChange={(e) => setAccompEdits((p) => ({ ...p, status: e.target.value }))}
                       /></div>
+                    </div>
+                    <div className="info-box">
+                      <label>🪞 Espelhar acompanhamento</label>
+                      <div style={{display: 'flex', alignItems: 'center', gap: '8px', margin: '0.6rem 0 0'}}>
+                        <input type="checkbox" id="espelhar-edit"
+                          checked={accompEdits.visivelEm ? accompEdits.visivelEm.length > 1 : ((selectedAccompaniment.visivelEm && selectedAccompaniment.visivelEm.length > 1) || false)}
+                          onChange={(e) => {
+                            const marcado = e.target.checked;
+                            const base = selectedAccompaniment.setor || 'gabinete';
+                            const outro = base === 'asstec' ? 'gabinete' : 'asstec';
+                            const visivelEm = marcado ? [base, outro] : [base];
+                            setAccompEdits((p) => ({ ...p, espelhar: marcado, visivelEm }));
+                          }}
+                          style={{width: '16px', height: '16px', cursor: 'pointer'}} />
+                        <label htmlFor="espelhar-edit" style={{margin: 0, cursor: 'pointer', textTransform: 'none', fontSize: '13px', fontWeight: 600, opacity: 1}}>
+                          Este processo também deve ser acompanhado pel{selectedAccompaniment.setor === 'asstec' ? 'o Gabinete' : 'a ASSTEC'} (aparece nos dois)
+                        </label>
+                      </div>
                     </div>
                     {selectedAccompaniment.setor === 'asstec' && (
                       <div className="info-box">
@@ -2184,9 +2362,14 @@ export default function SistemaDespacho() {
                         <div key={acc.id} onClick={() => { setSelectedAccompaniment(acc); setAccompEdits({}); }} className="card-item">
                           <div className="card-top">
                             <strong>{acc.numeroProcesso}</strong>
-                            {acc.lembreteAtivo && !acc.lembreteEnviado && (
-                              <span className="badge hearing-soon">🔔 Lembrete {lembreteDataEnvio(acc)?.toLocaleDateString('pt-BR') || ''}</span>
-                            )}
+                            <span style={{display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap'}}>
+                              {(acc.visivelEm && acc.visivelEm.length > 1) && (
+                                <span className="badge setor-tag">🪞 Espelhado</span>
+                              )}
+                              {acc.lembreteAtivo && !acc.lembreteEnviado && (
+                                <span className="badge hearing-soon">🔔 Lembrete {lembreteDataEnvio(acc)?.toLocaleDateString('pt-BR') || ''}</span>
+                              )}
+                            </span>
                           </div>
                           <p className="card-text"><strong>Objeto:</strong> {acc.objeto}</p>
                           <p className="card-text"><strong>Setor Anterior:</strong> {acc.setorAnterior} ({acc.dataSetorAnterior})</p>
