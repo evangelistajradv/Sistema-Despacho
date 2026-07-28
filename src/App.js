@@ -137,12 +137,18 @@ export default function SistemaDespacho() {
   const [pushStatusMsg, setPushStatusMsg] = useState('');
   // Estado local de edição dos campos do acompanhamento (evita salvar no Firebase a cada tecla)
   const [accompEdits, setAccompEdits] = useState({});
+  // Edição inline de despachos de gabinete
+  const [processEdits, setProcessEdits] = useState({});
+  // Edição inline de publicações do DOE/PI
+  const [doeEdits, setDoeEdits] = useState({});
 
   // Prazos Judiciais
   const [deadlines, setDeadlines] = useState([]);
   const [selectedDeadline, setSelectedDeadline] = useState(null);
   const [newDeadlineMode, setNewDeadlineMode] = useState(false);
   const [newDeadline, setNewDeadline] = useState({ numeroPJE: '', numeroSEI: '', prazoFatal: '', tipoPrazo: 'longo', objeto: '' });
+  // Edição inline de prazos judiciais
+  const [deadlineEdits, setDeadlineEdits] = useState({});
 
   // Edição inline de audiências
   const [hearingEdits, setHearingEdits] = useState({});
@@ -1031,6 +1037,11 @@ export default function SistemaDespacho() {
 
   const deleteProcess = async (id) => { await deleteDoc(doc(db, 'processos', id)); setSelectedProcess(null); };
 
+  const updateProcess = async (id, updatedData) => {
+    await updateDoc(doc(db, 'processos', id), updatedData);
+    setSelectedProcess((prev) => (prev && prev.id === id ? { ...prev, ...updatedData } : prev));
+  };
+
   const createNewAccompaniment = async (setor) => {
     if (!newAccompaniment.objeto || !newAccompaniment.numeroProcesso) { alert('Preencha campos obrigatórios'); return; }
     if (loading) return;
@@ -1232,6 +1243,11 @@ export default function SistemaDespacho() {
   };
 
   const deleteDoe = async (id) => { await deleteDoc(doc(db, 'doe', id)); setSelectedDoe(null); };
+
+  const updateDoe = async (id, updatedData) => {
+    await updateDoc(doc(db, 'doe', id), updatedData);
+    setSelectedDoe((prev) => (prev && prev.id === id ? { ...prev, ...updatedData } : prev));
+  };
 
   const addDoeEmail = async () => {
     const emails = parseEmails(newDoeEmail);
@@ -1615,6 +1631,11 @@ export default function SistemaDespacho() {
 
   const deleteDeadline = async (id) => { await deleteDoc(doc(db, 'prazos', id)); setSelectedDeadline(null); };
 
+  const updateDeadline = async (id, updatedData) => {
+    await updateDoc(doc(db, 'prazos', id), updatedData);
+    setSelectedDeadline((prev) => (prev && prev.id === id ? { ...prev, ...updatedData } : prev));
+  };
+
   // Troca de senha via Firebase Authentication: precisa reautenticar com a
   // senha atual antes de poder definir a nova (exigência de segurança do
   // próprio Firebase — evita que alguém com a sessão aberta troque a senha
@@ -1937,7 +1958,7 @@ export default function SistemaDespacho() {
                         <p className="dashboard-empty">Nenhum prazo vencendo nos próximos {dashboardConfig.diasPrazoAlerta} dias.</p>
                       ) : (
                         prazosOrdenados.slice(0, 8).map((dl) => (
-                          <div key={dl.id} onClick={() => { setActiveTab('prazos'); setSelectedDeadline(dl); }}
+                          <div key={dl.id} onClick={() => { setActiveTab('prazos'); setSelectedDeadline(dl); setDeadlineEdits({}); }}
                             className="card-item" style={{ borderLeft: `4px solid ${dl._status.cor}` }}>
                             <div className="card-top">
                               <strong>{dl.numeroPJE || dl.numeroSEI}</strong>
@@ -2019,7 +2040,7 @@ export default function SistemaDespacho() {
                   </div>
                 ) : selectedProcess ? (
                   <div className="detail-card">
-                    <button className="back-button" onClick={() => setSelectedProcess(null)}>← Voltar</button>
+                    <button className="back-button" onClick={() => { setSelectedProcess(null); setProcessEdits({}); }}>← Voltar</button>
                     <div className={`card-header ${selectedProcess.despachado ? 'despachado' : ''}`}>
                       <div><h2>{selectedProcess.numero}</h2><span className={`badge status-${selectedProcess.status}`}>{selectedProcess.status}</span></div>
                       {can('deletar') && (<button className="btn-delete" onClick={() => deleteProcess(selectedProcess.id)}>🗑️</button>)}
@@ -2030,13 +2051,35 @@ export default function SistemaDespacho() {
                         <p><strong>Decisão:</strong> {selectedProcess.motivo}</p>
                       </div>
                     )}
-                    <div className="info-box"><label>Objeto</label><p>{selectedProcess.objeto}</p></div>
+                    {can('editar') ? (
+                      <div className="form-section">
+                        <div className="form-group"><label>Objeto</label><textarea
+                          value={processEdits.objeto ?? selectedProcess.objeto}
+                          onChange={(e) => setProcessEdits((p) => ({ ...p, objeto: e.target.value }))}
+                          onBlur={() => processEdits.objeto !== undefined && updateProcess(selectedProcess.id, { objeto: processEdits.objeto })}
+                        /></div>
+                        <div className="form-group"><label>Parte Interessada</label><input type="text"
+                          value={processEdits.parteInteressada ?? selectedProcess.parteInteressada ?? ''}
+                          onChange={(e) => setProcessEdits((p) => ({ ...p, parteInteressada: e.target.value }))}
+                          onBlur={() => processEdits.parteInteressada !== undefined && updateProcess(selectedProcess.id, { parteInteressada: processEdits.parteInteressada })}
+                        /></div>
+                        <div className="form-group"><label>Análise Técnica</label><textarea
+                          value={processEdits.analise ?? selectedProcess.analise ?? ''}
+                          onChange={(e) => setProcessEdits((p) => ({ ...p, analise: e.target.value }))}
+                          onBlur={() => processEdits.analise !== undefined && updateProcess(selectedProcess.id, { analise: processEdits.analise })}
+                        /></div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="info-box"><label>Objeto</label><p>{selectedProcess.objeto}</p></div>
+                      </>
+                    )}
                     <div className="info-meta-grid">
-                      <div className="info-meta-item"><label>Parte</label><p>{selectedProcess.parteInteressada || '—'}</p></div>
+                      {!can('editar') && <div className="info-meta-item"><label>Parte</label><p>{selectedProcess.parteInteressada || '—'}</p></div>}
                       <div className="info-meta-item"><label>Data Entrada</label><p>{selectedProcess.dataEntrada}</p></div>
                       <div className="info-meta-item"><label>Status</label><p>{selectedProcess.status}</p></div>
                     </div>
-                    <div className="info-box"><label>Análise Técnica</label><p>{selectedProcess.analise || 'Sem análise'}</p></div>
+                    {!can('editar') && <div className="info-box"><label>Análise Técnica</label><p>{selectedProcess.analise || 'Sem análise'}</p></div>}
                     {selectedProcess.observacoes && (
                       <div className="info-box">
                         <label>📝 Observações do Despacho</label>
@@ -2089,7 +2132,7 @@ export default function SistemaDespacho() {
                     {processes.length === 0 ? (<p className="empty-state">Nenhum processo</p>) : (
                       processes.map(process => (
                         <div key={process.id} className={`card-item ${process.despachado ? 'despachado' : ''}`} style={{position: 'relative'}}>
-                          <button onClick={() => setSelectedProcess(process)} style={{width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: 0}}>
+                          <button onClick={() => { setSelectedProcess(process); setProcessEdits({}); }} style={{width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: 0}}>
                             <div className="card-top">
                               <strong>{process.numero}</strong>
                               <span style={{display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap'}}>
@@ -2574,17 +2617,49 @@ export default function SistemaDespacho() {
                   </div>
                 ) : selectedDoe ? (
                   <div className="detail-card">
-                    <button className="back-button" onClick={() => setSelectedDoe(null)}>← Voltar</button>
+                    <button className="back-button" onClick={() => { setSelectedDoe(null); setDoeEdits({}); }}>← Voltar</button>
                     <div className="card-header"><h2>DOE/PI</h2></div>
-                    <div className="info-grid">
-                      <div className="info-item"><label>Data Publicação</label><p>{selectedDoe.dataPublicacao}</p></div>
-                      {selectedDoe.numeroDiario && <div className="info-item"><label>Número Diário</label><p>{selectedDoe.numeroDiario}</p></div>}
-                      <div className="info-item"><label>Data Disponibilização</label><p>{selectedDoe.dataDisponibilizacao || 'N/A'}</p></div>
-                    </div>
-                    <div className="info-box">
-                      <label>Conteúdo</label>
-                      <div className="doe-content" dangerouslySetInnerHTML={{ __html: formatDoeContent(selectedDoe.conteudo) }} />
-                    </div>
+                    {can('editar') ? (
+                      <div className="form-section">
+                        <div className="form-grid">
+                          <div className="form-group"><label>Data Publicação</label><input type="date"
+                            value={doeEdits.dataPublicacao ?? selectedDoe.dataPublicacao}
+                            onChange={(e) => updateDoe(selectedDoe.id, { dataPublicacao: e.target.value })}
+                          /></div>
+                          <div className="form-group"><label>Data Disponibilização</label><input type="date"
+                            value={doeEdits.dataDisponibilizacao ?? selectedDoe.dataDisponibilizacao ?? ''}
+                            onChange={(e) => updateDoe(selectedDoe.id, { dataDisponibilizacao: e.target.value })}
+                          /></div>
+                        </div>
+                        <div className="form-group"><label>Número Diário</label><input type="text"
+                          value={doeEdits.numeroDiario ?? selectedDoe.numeroDiario ?? ''}
+                          onChange={(e) => setDoeEdits((p) => ({ ...p, numeroDiario: e.target.value }))}
+                          onBlur={() => doeEdits.numeroDiario !== undefined && updateDoe(selectedDoe.id, { numeroDiario: doeEdits.numeroDiario })}
+                        /></div>
+                        <div className="form-group">
+                          <label>Conteúdo</label>
+                          <textarea
+                            value={doeEdits.conteudo ?? selectedDoe.conteudo}
+                            onChange={(e) => setDoeEdits((p) => ({ ...p, conteudo: e.target.value }))}
+                            onBlur={() => doeEdits.conteudo !== undefined && updateDoe(selectedDoe.id, { conteudo: doeEdits.conteudo })}
+                            style={{minHeight: '200px', fontFamily: 'monospace', fontSize: '13px'}}
+                          />
+                          <p style={{fontSize: '11px', color: 'var(--neutral-400)', marginTop: '4px'}}>💡 Use *texto* para negrito — ex: <em>*SEMARH*</em> vira <strong>SEMARH</strong></p>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="info-grid">
+                          <div className="info-item"><label>Data Publicação</label><p>{selectedDoe.dataPublicacao}</p></div>
+                          {selectedDoe.numeroDiario && <div className="info-item"><label>Número Diário</label><p>{selectedDoe.numeroDiario}</p></div>}
+                          <div className="info-item"><label>Data Disponibilização</label><p>{selectedDoe.dataDisponibilizacao || 'N/A'}</p></div>
+                        </div>
+                        <div className="info-box">
+                          <label>Conteúdo</label>
+                          <div className="doe-content" dangerouslySetInnerHTML={{ __html: formatDoeContent(selectedDoe.conteudo) }} />
+                        </div>
+                      </>
+                    )}
                     {selectedDoe.pdfUrl && (
                       <div className="info-box">
                         <label>📎 DOE em PDF (anexo antigo)</label>
@@ -2630,7 +2705,7 @@ export default function SistemaDespacho() {
                     )}
                     {doePublications.length === 0 ? (<p className="empty-state">Nenhuma publicação</p>) : (
                       doePublications.sort((a, b) => new Date(b.dataPublicacao) - new Date(a.dataPublicacao)).map(doe => (
-                        <div key={doe.id} onClick={() => setSelectedDoe(doe)} className="card-item">
+                        <div key={doe.id} onClick={() => { setSelectedDoe(doe); setDoeEdits({}); }} className="card-item">
                           <div className="card-top"><strong>Diário #{doe.numeroDiario || 'S/N'}</strong><span className="badge">{new Date(doe.dataPublicacao).toLocaleDateString('pt-BR')}</span></div>
                           <div className="doe-preview" dangerouslySetInnerHTML={{ __html: formatDoeContent(doe.conteudo) }} />
                           {doe.pdfUrl && <p className="card-text" style={{marginTop:'8px', color:'var(--primary-main)', fontWeight:600}}><i className="ti ti-file-type-pdf"></i> PDF anexado</p>}
@@ -2668,20 +2743,61 @@ export default function SistemaDespacho() {
                   </div>
                 ) : selectedDeadline ? (
                   <div className="detail-card">
-                    <button className="back-button" onClick={() => setSelectedDeadline(null)}>← Voltar</button>
+                    <button className="back-button" onClick={() => { setSelectedDeadline(null); setDeadlineEdits({}); }}>← Voltar</button>
                     <div className="card-header">
                       <h2>⚖️ {selectedDeadline.numeroPJE || selectedDeadline.numeroSEI}</h2>
                       <span className={`badge ${new Date(selectedDeadline.prazoFatal) < new Date() ? 'status-indeferido' : 'status-pendente'}`}>
                         {new Date(selectedDeadline.prazoFatal) < new Date() ? 'Vencido' : `Vence em ${Math.ceil((new Date(selectedDeadline.prazoFatal + 'T23:59:59') - new Date()) / (1000 * 60 * 60 * 24))} dia(s)`}
                       </span>
                     </div>
-                    <div className="info-grid">
-                      {selectedDeadline.numeroPJE && <div className="info-item"><label>Número PJE</label><p>{selectedDeadline.numeroPJE}</p></div>}
-                      {selectedDeadline.numeroSEI && <div className="info-item"><label>Número SEI</label><p>{selectedDeadline.numeroSEI}</p></div>}
-                      <div className="info-item"><label>Prazo Fatal</label><p>{new Date(selectedDeadline.prazoFatal).toLocaleDateString('pt-BR')}</p></div>
-                      <div className="info-item"><label>Tipo de Prazo</label><p>{selectedDeadline.tipoPrazo === 'curto' ? 'Curto (5–10 dias)' : 'Longo'}</p></div>
-                    </div>
-                    {selectedDeadline.objeto && <div className="info-box"><label>Objeto</label><p>{selectedDeadline.objeto}</p></div>}
+                    {can('editar') ? (
+                      <div className="form-section">
+                        <div className="form-grid">
+                          <div className="form-group"><label>Número PJE</label><input type="text"
+                            value={deadlineEdits.numeroPJE ?? selectedDeadline.numeroPJE ?? ''}
+                            onChange={(e) => setDeadlineEdits((p) => ({ ...p, numeroPJE: e.target.value }))}
+                            onBlur={() => deadlineEdits.numeroPJE !== undefined && updateDeadline(selectedDeadline.id, { numeroPJE: deadlineEdits.numeroPJE })}
+                          /></div>
+                          <div className="form-group"><label>Número SEI</label><input type="text"
+                            value={deadlineEdits.numeroSEI ?? selectedDeadline.numeroSEI ?? ''}
+                            onChange={(e) => setDeadlineEdits((p) => ({ ...p, numeroSEI: e.target.value }))}
+                            onBlur={() => deadlineEdits.numeroSEI !== undefined && updateDeadline(selectedDeadline.id, { numeroSEI: deadlineEdits.numeroSEI })}
+                          /></div>
+                        </div>
+                        <div className="form-grid">
+                          <div className="form-group"><label>Prazo Fatal</label><input type="date"
+                            value={deadlineEdits.prazoFatal ?? selectedDeadline.prazoFatal}
+                            onChange={(e) => updateDeadline(selectedDeadline.id, { prazoFatal: e.target.value })}
+                          /></div>
+                          <div className="form-group">
+                            <label>Tipo de Prazo</label>
+                            <select
+                              value={deadlineEdits.tipoPrazo ?? selectedDeadline.tipoPrazo}
+                              onChange={(e) => updateDeadline(selectedDeadline.id, { tipoPrazo: e.target.value })}
+                              style={{width:'100%', padding:'10px 12px', border:'1px solid var(--neutral-300)', borderRadius:'8px', fontSize:'14px', background:'var(--bg-card)', color:'var(--text-primary)'}}
+                            >
+                              <option value="longo">Longo (notif. em 10, 5 e 3 dias)</option>
+                              <option value="curto">Curto — 5 a 10 dias (notif. em 5, 3 e 2 dias)</option>
+                            </select>
+                          </div>
+                        </div>
+                        <div className="form-group"><label>Objeto / Descrição</label><textarea
+                          value={deadlineEdits.objeto ?? selectedDeadline.objeto ?? ''}
+                          onChange={(e) => setDeadlineEdits((p) => ({ ...p, objeto: e.target.value }))}
+                          onBlur={() => deadlineEdits.objeto !== undefined && updateDeadline(selectedDeadline.id, { objeto: deadlineEdits.objeto })}
+                        /></div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="info-grid">
+                          {selectedDeadline.numeroPJE && <div className="info-item"><label>Número PJE</label><p>{selectedDeadline.numeroPJE}</p></div>}
+                          {selectedDeadline.numeroSEI && <div className="info-item"><label>Número SEI</label><p>{selectedDeadline.numeroSEI}</p></div>}
+                          <div className="info-item"><label>Prazo Fatal</label><p>{new Date(selectedDeadline.prazoFatal).toLocaleDateString('pt-BR')}</p></div>
+                          <div className="info-item"><label>Tipo de Prazo</label><p>{selectedDeadline.tipoPrazo === 'curto' ? 'Curto (5–10 dias)' : 'Longo'}</p></div>
+                        </div>
+                        {selectedDeadline.objeto && <div className="info-box"><label>Objeto</label><p>{selectedDeadline.objeto}</p></div>}
+                      </>
+                    )}
                     {can('deletar') && (<button className="btn-delete" onClick={() => deleteDeadline(selectedDeadline.id)}>🗑️ Deletar</button>)}
                   </div>
                 ) : (
@@ -2697,7 +2813,7 @@ export default function SistemaDespacho() {
                       [...deadlines].sort((a, b) => new Date(a.prazoFatal) - new Date(b.prazoFatal)).map(dl => {
                         const { vencido, urgente, cor, label } = prazoStatus(dl.prazoFatal);
                         return (
-                          <div key={dl.id} onClick={() => setSelectedDeadline(dl)} className="card-item" style={{ borderLeft: `4px solid ${cor}` }}>
+                          <div key={dl.id} onClick={() => { setSelectedDeadline(dl); setDeadlineEdits({}); }} className="card-item" style={{ borderLeft: `4px solid ${cor}` }}>
                             <div className="card-top">
                               <strong>{dl.numeroPJE || dl.numeroSEI}</strong>
                               <span className={`badge ${vencido ? 'status-indeferido' : urgente ? 'status-diligencia' : 'status-pendente'}`}>
