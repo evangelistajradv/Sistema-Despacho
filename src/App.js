@@ -109,6 +109,10 @@ export default function SistemaDespacho() {
   const [showAccompEmailModal, setShowAccompEmailModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsPanel, setSettingsPanel] = useState(null); // null | 'features' | 'notifications'
+  const [settingsDirty, setSettingsDirty] = useState(false); // há alterações administrativas ainda não salvas
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsSavedMsg, setSettingsSavedMsg] = useState('');
+  const [settingsSnapshot, setSettingsSnapshot] = useState(null); // estado no momento em que o modal foi aberto, para "Descartar"
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -685,6 +689,36 @@ export default function SistemaDespacho() {
       console.error('❌ ERRO ao salvar config no Firebase:', e.message);
       alert('Erro ao salvar no banco de dados. Verifique o console (F12) e as regras do Firebase.');
     }
+  };
+
+  // Ao abrir o modal de Configurações, tira uma "foto" do estado administrativo
+  // atual — é para onde o botão "Descartar" volta se o master mudar de ideia.
+  useEffect(() => {
+    if (showSettings) {
+      setSettingsSnapshot({ dashboardConfig, tabVisibility, pushNotifConfig, userPermissions });
+      setSettingsDirty(false);
+      setSettingsSavedMsg('');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showSettings]);
+
+  const saveSettingsChanges = async () => {
+    setSettingsSaving(true);
+    await saveConfig({});
+    setSettingsSnapshot({ dashboardConfig, tabVisibility, pushNotifConfig, userPermissions });
+    setSettingsDirty(false);
+    setSettingsSaving(false);
+    setSettingsSavedMsg('Configurações salvas com sucesso.');
+    setTimeout(() => setSettingsSavedMsg(''), 3500);
+  };
+
+  const discardSettingsChanges = () => {
+    if (!settingsSnapshot) return;
+    setDashboardConfig(settingsSnapshot.dashboardConfig);
+    setTabVisibility(settingsSnapshot.tabVisibility);
+    setPushNotifConfig(settingsSnapshot.pushNotifConfig);
+    setUserPermissions(settingsSnapshot.userPermissions);
+    setSettingsDirty(false);
   };
 
   const finishLogin = (role) => {
@@ -2861,19 +2895,23 @@ export default function SistemaDespacho() {
         <div className="modal-overlay">
           <div className="settings-modal">
             <div className="settings-header">
-              <h3>⚙️ Configurações</h3>
-              <button className="close-btn" onClick={() => setShowSettings(false)}>✕</button>
+              <h3><i className="ti ti-settings" style={{marginRight:'8px'}}></i>Configurações</h3>
+              <button className="close-btn" onClick={() => {
+                if (settingsDirty && !window.confirm('Há alterações não salvas nas configurações. Sair sem salvar?')) return;
+                if (settingsDirty) discardSettingsChanges();
+                setShowSettings(false);
+              }}>✕</button>
             </div>
             <div className="settings-content">
               <div className="settings-section">
-                <h4>🎨 Tema</h4>
+                <h4><i className="ti ti-palette"></i>Tema</h4>
                 <div className="theme-selector">
                   <button className={`theme-btn ${theme === 'light' ? 'active' : ''}`} onClick={() => setTheme('light')}><span>☀️</span><span>Claro</span></button>
                   <button className={`theme-btn ${theme === 'dark' ? 'active' : ''}`} onClick={() => setTheme('dark')}><span>🌙</span><span>Escuro</span></button>
                 </div>
               </div>
               <div className="settings-section">
-                <h4>🔐 Alterar Senha</h4>
+                <h4><i className="ti ti-lock"></i>Alterar Senha</h4>
                 <div className="form-group"><label>Senha Atual</label><PasswordField value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} placeholder="Digite sua senha atual" /></div>
                 <div className="form-group"><label>Nova Senha</label><PasswordField value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Digite a nova senha" /></div>
                 <div className="form-group"><label>Confirmar Nova Senha</label><PasswordField value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Confirme a nova senha" /></div>
@@ -2882,7 +2920,7 @@ export default function SistemaDespacho() {
                 <button className="btn-primary" onClick={handleChangePassword}>Alterar Senha</button>
               </div>
               <div className="settings-section">
-                <h4>📱 Status de Notificações deste Dispositivo</h4>
+                <h4><i className="ti ti-device-mobile"></i>Status de Notificações deste Dispositivo</h4>
                 {pushStatusMsg ? (
                   <p style={{fontSize:'13px', padding:'10px 14px', borderRadius:'8px', background: pushStatusMsg.startsWith('✅') ? 'rgba(5,150,105,0.1)' : 'rgba(220,38,38,0.1)', color: pushStatusMsg.startsWith('✅') ? 'var(--accent-green)' : 'var(--accent-red)', fontWeight:'600'}}>
                     {pushStatusMsg}
@@ -2891,20 +2929,20 @@ export default function SistemaDespacho() {
                   <p style={{fontSize:'13px', color:'var(--neutral-400)'}}>Verificando...</p>
                 )}
                 <button className="btn-secondary" style={{marginTop:'10px', width:'auto'}} onClick={() => registerPushSubscription(currentUser)}>
-                  🔄 Registrar este dispositivo
+                  <i className="ti ti-refresh"></i> Registrar este dispositivo
                 </button>
               </div>
 
               <div className="settings-section">
-                <h4>👤 Informações da Conta</h4>
+                <h4><i className="ti ti-user-circle"></i>Informações da Conta</h4>
                 <div className="info-line"><span>Usuário:</span><strong>{currentUser}</strong></div>
                 <div className="info-line"><span>Nome:</span><strong>{ALL_USERS[currentUser]?.nome}</strong></div>
                 <div className="info-line"><span>Função:</span><strong>{ALL_USERS[currentUser]?.role}</strong></div>
               </div>
 
               {currentUser === 'master' && (
-                <div className="settings-section">
-                  <h4>🛠️ Administração</h4>
+                <div className="settings-section settings-section-admin">
+                  <h4><i className="ti ti-adjustments"></i>Administração</h4>
 
                   {/* Personalizar o Painel (dashboard) inicial */}
                   <button
@@ -2929,10 +2967,10 @@ export default function SistemaDespacho() {
                             { key: 'showAcompanhamentos', label: 'Acompanhamentos Movimentados' },
                           ].map(({ key, label }) => {
                             const checked = dashboardConfig[key] !== false;
-                            const toggle = async () => {
+                            const toggle = () => {
                               const updated = { ...dashboardConfig, [key]: !checked };
                               setDashboardConfig(updated);
-                              await saveConfig({ dashboardConfig: updated });
+                              setSettingsDirty(true);
                             };
                             return (
                               <label key={key} className={`push-user-chip ${checked ? 'active' : ''}`}>
@@ -2948,8 +2986,7 @@ export default function SistemaDespacho() {
                         <div style={{display:'flex', alignItems:'center', gap:'8px'}}>
                           <input type="number" min="1" max="90" value={dashboardConfig.diasAcompanhamento}
                             style={{width:'80px'}}
-                            onChange={(e) => setDashboardConfig({ ...dashboardConfig, diasAcompanhamento: Number(e.target.value) || 1 })}
-                            onBlur={async () => await saveConfig({ dashboardConfig })} />
+                            onChange={(e) => { setDashboardConfig({ ...dashboardConfig, diasAcompanhamento: Number(e.target.value) || 1 }); setSettingsDirty(true); }} />
                           <span style={{fontSize:'13px', color:'var(--text-secondary)'}}>dias (informação instantânea — ajuste como preferir)</span>
                         </div>
                       </div>
@@ -2958,8 +2995,7 @@ export default function SistemaDespacho() {
                         <div style={{display:'flex', alignItems:'center', gap:'8px'}}>
                           <input type="number" min="1" max="90" value={dashboardConfig.diasPrazoAlerta}
                             style={{width:'80px'}}
-                            onChange={(e) => setDashboardConfig({ ...dashboardConfig, diasPrazoAlerta: Number(e.target.value) || 1 })}
-                            onBlur={async () => await saveConfig({ dashboardConfig })} />
+                            onChange={(e) => { setDashboardConfig({ ...dashboardConfig, diasPrazoAlerta: Number(e.target.value) || 1 }); setSettingsDirty(true); }} />
                           <span style={{fontSize:'13px', color:'var(--text-secondary)'}}>dias</span>
                         </div>
                       </div>
@@ -2994,13 +3030,13 @@ export default function SistemaDespacho() {
                             {Object.entries(ALL_USERS).map(([role, info]) => {
                               if (role === 'master') return null; // master sempre vê tudo
                               const checked = tabVisibility[tab.id]?.[role] !== false;
-                              const toggle = async () => {
+                              const toggle = () => {
                                 const updated = {
                                   ...tabVisibility,
                                   [tab.id]: { ...tabVisibility[tab.id], [role]: !checked }
                                 };
                                 setTabVisibility(updated);
-                                await saveConfig({ tabVisibility: updated });
+                                setSettingsDirty(true);
                               };
                               return (
                                 <label key={role} className={`push-user-chip ${checked ? 'active' : ''}`}>
@@ -3046,13 +3082,13 @@ export default function SistemaDespacho() {
                           <div className="push-config-users">
                             {Object.entries(ALL_USERS).map(([role, info]) => {
                               const checked = pushNotifConfig[key]?.[role] || false;
-                              const toggle = async () => {
+                              const toggle = () => {
                                 const updated = {
                                   ...pushNotifConfig,
                                   [key]: { ...pushNotifConfig[key], [role]: !checked }
                                 };
                                 setPushNotifConfig(updated);
-                                await saveConfig({ pushNotifConfig: updated });
+                                setSettingsDirty(true);
                               };
                               return (
                                 <label key={role} className={`push-user-chip ${checked ? 'active' : ''}`}>
@@ -3090,13 +3126,13 @@ export default function SistemaDespacho() {
                             <div className="push-config-users">
                               {PERMISSION_ACTIONS.map(({ key, label }) => {
                                 const checked = userPermissions[role]?.[key] === true;
-                                const toggle = async () => {
+                                const toggle = () => {
                                   const updated = {
                                     ...userPermissions,
                                     [role]: { ...userPermissions[role], [key]: !checked }
                                   };
                                   setUserPermissions(updated);
-                                  await saveConfig({ userPermissions: updated });
+                                  setSettingsDirty(true);
                                 };
                                 return (
                                   <label key={key} className={`push-user-chip ${checked ? 'active' : ''}`}>
@@ -3174,6 +3210,29 @@ export default function SistemaDespacho() {
                       ))}
                     </div>
                   )}
+
+                  <div className={`settings-save-bar ${settingsDirty ? 'is-dirty' : ''}`}>
+                    {settingsDirty ? (
+                      <>
+                        <span className="settings-save-msg">
+                          <i className="ti ti-alert-circle"></i>
+                          Há alterações em Painel, Funcionalidades, Notificações ou Permissões ainda não salvas.
+                        </span>
+                        <div className="settings-save-actions">
+                          <button type="button" className="btn-ghost" onClick={discardSettingsChanges} disabled={settingsSaving}>Descartar</button>
+                          <button type="button" className="btn-primary" onClick={saveSettingsChanges} disabled={settingsSaving}>
+                            <i className={`ti ${settingsSaving ? 'ti-loader-2 spin' : 'ti-device-floppy'}`}></i>
+                            {settingsSaving ? 'Salvando…' : 'Salvar Alterações'}
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <span className="settings-save-msg settings-save-msg-ok">
+                        <i className="ti ti-circle-check"></i>
+                        {settingsSavedMsg || 'Tudo salvo.'}
+                      </span>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
