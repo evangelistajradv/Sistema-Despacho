@@ -2197,7 +2197,7 @@ export default function SistemaDespacho() {
               <label htmlFor="usuario-reg">Usuário</label>
               <select id="usuario-reg" value={loginUser} onChange={(e) => { setLoginUser(e.target.value); setRegCurrentPass(''); setRegNewPass(''); setRegConfirmPass(''); setRegError(''); }} className="login-input">
                 {Object.entries(ALL_USERS).map(([role, info]) => (
-                  <option key={role} value={role}>{role === 'master' ? 'Master' : info.nome}</option>
+                  <option key={role} value={role}>{info.nome}</option>
                 ))}
               </select>
             </div>
@@ -2245,7 +2245,7 @@ export default function SistemaDespacho() {
             <label htmlFor="usuario">Usuário</label>
             <select id="usuario" value={loginUser} onChange={(e) => { setLoginUser(e.target.value); setForgotMsg(''); setLoginPass(''); }} className="login-input">
               {Object.entries(ALL_USERS).map(([role, info]) => (
-                <option key={role} value={role}>{role === 'master' ? 'Master' : info.nome}{info.externo ? ` (Externo — ${info.setor})` : ''}</option>
+                <option key={role} value={role}>{info.nome}{info.externo ? ` (Externo — ${info.setor})` : ''}</option>
               ))}
             </select>
           </div>
@@ -3329,7 +3329,7 @@ export default function SistemaDespacho() {
                             style={{width:'100%', padding:'10px 12px', border:'1px solid var(--neutral-300)', borderRadius:'8px', fontSize:'14px', background:'var(--bg-card)', color:'var(--text-primary)'}}
                           >
                             <option value="" disabled>Selecione...</option>
-                            <option value="master">Master (eu)</option>
+                            <option value="master">{ALL_USERS.master?.nome} (eu)</option>
                             <option value="servidora">Isamayla</option>
                             <option value="estagiaria">Maria Clara</option>
                           </select>
