@@ -33,6 +33,15 @@ const SETOR_POR_USUARIO = {
   luis_m_v: 'SGE',
 };
 
+// Setores da SEMARH que podem solicitar Prioridade de Tramitação (fora "Outros", digitado à mão).
+const SETORES_SEMARH = ['DLA', 'GLA', 'GMDA', 'DCbio', 'GGF', 'GUC', 'GFP', 'DRH', 'GRH', 'GCC', 'DPLA'];
+
+const PRIORIDADE_STATUS = {
+  recebido:    { label: 'Recebido',    color: 'blue' },
+  sob_analise: { label: 'Sob Análise', color: 'yellow' },
+  despachado:  { label: 'Despachado',  color: 'green' },
+};
+
 // Campo de senha com o "olhinho" para mostrar/ocultar o que foi digitado.
 function PasswordField({ id, value, onChange, placeholder, className }) {
   const [show, setShow] = useState(false);
@@ -50,7 +59,7 @@ function PasswordField({ id, value, onChange, placeholder, className }) {
 
 // Painel inicial (dashboard) — o que aparece é configurável pelo master
 const DEFAULT_DASHBOARD_CONFIG = {
-  showPendentes: true, showPrazos: true, showAudiencias: true, showAcompanhamentos: true,
+  showPendentes: true, showPrazos: true, showAudiencias: true, showAcompanhamentos: true, showPrioridade: true,
   diasAcompanhamento: 7, diasPrazoAlerta: 7,
 };
 
@@ -62,6 +71,16 @@ export default function SistemaDespacho() {
   const [publicDoeSelected, setPublicDoeSelected] = useState(null);
   const [publicAccessError, setPublicAccessError] = useState('');
   const [publicAccessLoading, setPublicAccessLoading] = useState(false);
+  // Prioridade de Tramitação — acesso público (login anônimo, análogo à Consulta ao DOE/PI)
+  const [publicPriorityMode, setPublicPriorityMode] = useState(false);
+  const [publicPriorityView, setPublicPriorityView] = useState('menu'); // 'menu' | 'solicitar' | 'consultar-setor' | 'consultar-lista'
+  const [publicPriorityList, setPublicPriorityList] = useState([]);
+  const [publicPrioritySetorConsulta, setPublicPrioritySetorConsulta] = useState(null);
+  const [publicPriorityForm, setPublicPriorityForm] = useState({ setor: SETORES_SEMARH[0], setorOutro: '', servidor: '', objeto: '', numeroProcesso: '' });
+  const [publicPrioritySubmitting, setPublicPrioritySubmitting] = useState(false);
+  const [publicPrioritySuccess, setPublicPrioritySuccess] = useState(false);
+  const [publicPriorityError, setPublicPriorityError] = useState('');
+  const [publicPriorityLoading, setPublicPriorityLoading] = useState(false);
   const [loginUser, setLoginUser] = useState('master');
   const [loginPass, setLoginPass] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
@@ -73,6 +92,9 @@ export default function SistemaDespacho() {
   const [forceReRegister, setForceReRegister] = useState({}); // { role: true } — master autorizou recadastro sem senha atual
   const [customUsers, setCustomUsers] = useState({}); // { role: { nome, criadoEm } } — usuários criados pelo master (também usado para renomear os 5 originais)
   const [newUserName, setNewUserName] = useState('');
+  const [newExternalUserName, setNewExternalUserName] = useState('');
+  const [newExternalUserSetor, setNewExternalUserSetor] = useState(SETORES_SEMARH[0]);
+  const [newExternalUserSetorOutro, setNewExternalUserSetorOutro] = useState('');
   // Todos os usuários do sistema: os 5 originais + os criados pelo master.
   // customUsers por último para também permitir renomear um usuário original.
   const ALL_USERS = { ...USUARIOS, ...customUsers };
@@ -86,6 +108,8 @@ export default function SistemaDespacho() {
   const [activeTab, setActiveTab] = useState('painel');
   const [processes, setProcesses] = useState([]);
   const [accompaniments, setAccompaniments] = useState([]);
+  const [priorities, setPriorities] = useState([]);
+  const [selectedPriority, setSelectedPriority] = useState(null);
   const [selectedProcess, setSelectedProcess] = useState(null);
   const [selectedAccompaniment, setSelectedAccompaniment] = useState(null);
   const [acompSubTab, setAcompSubTab] = useState(null); // null = ainda não escolheu; 'gabinete' ou 'asstec' depois de escolher
@@ -168,17 +192,19 @@ export default function SistemaDespacho() {
     prazos:          { master: true,  secretario: true,  chefe_gab: true,  servidora: true,  estagiaria: true  },
     despachoCriacao: { master: false, secretario: true,  chefe_gab: false, servidora: false, estagiaria: false },
     despachoStatus:  { master: false, secretario: true,  chefe_gab: true,  servidora: false, estagiaria: false },
+    prioridade:      { master: true,  secretario: false, chefe_gab: false, servidora: true,  estagiaria: true  },
   };
   const [pushNotifConfig, setPushNotifConfig] = useState(DEFAULT_PUSH_CONFIG);
 
   // Configuração de quais abas cada usuário pode visualizar (gerenciado pelo master)
   const TABS = [
-    { id: 'painel',          label: 'Painel',            icon: 'ti-layout-dashboard' },
-    { id: 'despacho-gab',    label: 'Despachos',         icon: 'ti-gavel' },
-    { id: 'acompanhamentos', label: 'Acompanhamentos',   icon: 'ti-map-pin' },
-    { id: 'audiencias',      label: 'Audiências',        icon: 'ti-calendar-event' },
-    { id: 'doe',             label: 'DOE/PI',            icon: 'ti-news' },
-    { id: 'prazos',          label: 'Prazos Judiciais',  icon: 'ti-scale' },
+    { id: 'painel',          label: 'Painel',                    icon: 'ti-layout-dashboard' },
+    { id: 'despacho-gab',    label: 'Despachos',                 icon: 'ti-gavel' },
+    { id: 'acompanhamentos', label: 'Acompanhamentos',           icon: 'ti-map-pin' },
+    { id: 'prioridade',      label: 'Prioridade de Tramitação',  icon: 'ti-star' },
+    { id: 'audiencias',      label: 'Audiências',                icon: 'ti-calendar-event' },
+    { id: 'doe',             label: 'DOE/PI',                    icon: 'ti-news' },
+    { id: 'prazos',          label: 'Prazos Judiciais',          icon: 'ti-scale' },
   ];
   const DEFAULT_TAB_VISIBILITY = TABS.reduce((acc, t) => {
     acc[t.id] = { master: true, secretario: true, chefe_gab: true, servidora: true, estagiaria: true };
@@ -187,6 +213,9 @@ export default function SistemaDespacho() {
   // "acompanhamentos" (chave já existente) passa a representar o acesso ao
   // Acompanhamento Gabinete; esta é a nova chave para o Acompanhamento ASSTEC.
   DEFAULT_TAB_VISIBILITY.acompanhamentos_asstec = { master: true, secretario: true, chefe_gab: true, servidora: true, estagiaria: true };
+  // Prioridade de Tramitação é um assunto interno da ASSTEC (não do Gabinete) —
+  // por padrão só master/servidora/estagiaria veem; o master pode liberar mais gente.
+  DEFAULT_TAB_VISIBILITY.prioridade = { master: true, secretario: false, chefe_gab: false, servidora: true, estagiaria: true };
   const [tabVisibility, setTabVisibility] = useState(DEFAULT_TAB_VISIBILITY);
 
   // master sempre vê tudo; demais respeitam a configuração (default = visível).
@@ -330,6 +359,71 @@ export default function SistemaDespacho() {
     } catch (e) {
       console.warn('⚠️ createNotification falhou:', e.message);
     }
+  };
+
+  // Notifica um único usuário específico (sino sempre; push só se a pessoa tiver
+  // habilitado a categoria "prioridade" em Configurações → Notificações).
+  // Diferente de createNotification (que notifica todo um grupo configurável),
+  // esta serve para casos "esta pessoa exata precisa saber", como atribuição.
+  const notifyRole = async (role, { title, main, secondary, icon, tab, itemId }) => {
+    try {
+      const ref = await addDoc(collection(db, 'notificacoes'), {
+        category: 'prioridade',
+        title: title || '', main: main || '', secondary: secondary || '',
+        icon: icon || '⭐', tab: tab || '', itemId: itemId || '',
+        audience: [role], readBy: {}, clearedBy: [], createdAt: new Date().toISOString(),
+      });
+      if (pushNotifConfig['prioridade']?.[role] && process.env.REACT_APP_VAPID_PUBLIC_KEY) {
+        const snap = await getDoc(doc(db, 'pushSubscriptions', role));
+        const subs = snap.exists() ? (snap.data().subscriptions || []) : [];
+        if (subs.length) {
+          await fetch('/api/send-push', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              subscriptions: subs,
+              notification: { title: title || 'ASSTEC', body: `${main || ''}${secondary ? '\n' + secondary : ''}`.substring(0, 150), tab: tab || '', itemId: itemId || '', tag: ref.id, notifId: ref.id },
+            }),
+          });
+        }
+      }
+    } catch (e) { console.warn('⚠️ notifyRole falhou:', e.message); }
+  };
+
+  // ─── Prioridade de Tramitação (master atribui; qualquer um dos dois marca despachado) ──
+  const assignPriority = async (id, role) => {
+    try {
+      await updateDoc(doc(db, 'prioridades', id), {
+        atribuidoA: role, status: 'sob_analise', dataAtribuicao: new Date().toISOString(),
+      });
+      setSelectedPriority((prev) => (prev && prev.id === id ? { ...prev, atribuidoA: role, status: 'sob_analise' } : prev));
+      await notifyRole(role, {
+        title: 'Prioridade atribuída a você',
+        main: 'Um processo de prioridade de tramitação foi atribuído a você.',
+        icon: '⭐', tab: 'prioridade', itemId: id,
+      });
+    } catch (e) { console.error('❌ Erro ao atribuir prioridade:', e.message); alert('Erro ao atribuir. Verifique as regras do Firebase.'); }
+  };
+
+  const dispatchPriority = async (id) => {
+    try {
+      await updateDoc(doc(db, 'prioridades', id), { status: 'despachado', dataDespacho: new Date().toISOString() });
+      setSelectedPriority((prev) => (prev && prev.id === id ? { ...prev, status: 'despachado' } : prev));
+    } catch (e) { console.error('❌ Erro ao despachar prioridade:', e.message); alert('Erro ao marcar como despachado.'); }
+  };
+
+  const deletePriority = async (id) => {
+    if (!window.confirm('Remover este pedido de prioridade de tramitação?')) return;
+    await deleteDoc(doc(db, 'prioridades', id));
+    setSelectedPriority(null);
+  };
+
+  // Amarelo a partir de 5 dias parado sem despacho; vermelho/crítico a partir de 10.
+  const priorityUrgency = (p) => {
+    if (p.status === 'despachado' || !p.dataSolicitacao) return 'ok';
+    const dias = Math.floor((new Date() - new Date(p.dataSolicitacao)) / (1000 * 60 * 60 * 24));
+    if (dias >= 10) return 'crit';
+    if (dias >= 5) return 'warn';
+    return 'normal';
   };
 
   const parseEmails = (emailString) => {
@@ -635,8 +729,13 @@ export default function SistemaDespacho() {
       (snap) => { setDeadlines(snap.docs.map(d => ({ id: d.id, ...d.data() }))); },
       (err) => { console.error('❌ Erro prazos Firebase:', err.message); }
     );
+    const unsubPriorities = onSnapshot(
+      collection(db, 'prioridades'),
+      (snap) => { setPriorities(snap.docs.map(d => ({ id: d.id, ...d.data() }))); },
+      (err) => { console.error('❌ Erro prioridades Firebase:', err.message); }
+    );
 
-    return () => { unsubProcesses(); unsubAcc(); unsubHearings(); unsubHearingsHist(); unsubDoe(); unsubDeadlines(); };
+    return () => { unsubProcesses(); unsubAcc(); unsubHearings(); unsubHearingsHist(); unsubDoe(); unsubDeadlines(); unsubPriorities(); };
   }, [authenticated]);
 
   // Consulta Pública: assina só a coleção do DOE/PI, independente do login
@@ -650,6 +749,53 @@ export default function SistemaDespacho() {
     );
     return () => unsub();
   }, [publicViewer]);
+
+  // Prioridade de Tramitação (consulta pública): mesma ideia, sessão anônima.
+  useEffect(() => {
+    if (!publicPriorityMode) return;
+    const unsub = onSnapshot(
+      collection(db, 'prioridades'),
+      (snap) => { setPublicPriorityList(snap.docs.map(d => ({ id: d.id, ...d.data() }))); },
+      (err) => { console.error('❌ Erro prioridades (consulta pública):', err.message); }
+    );
+    return () => unsub();
+  }, [publicPriorityMode]);
+
+  // Escalonamento de atraso: processos de prioridade parados (sem despacho) há
+  // 5 dias ou mais recebem um lembrete a cada 5 dias, para quem está atribuído
+  // e para o master — repete indefinidamente até o despacho. Roda a partir da
+  // sessão do master (mesma lógica do arquivamento automático de audiências).
+  useEffect(() => {
+    if (!authenticated || currentUser !== 'master' || priorities.length === 0) return;
+    const agora = new Date();
+    const pendentes = priorities.filter((p) => p.status !== 'despachado' && p.dataSolicitacao);
+    (async () => {
+      for (const p of pendentes) {
+        const diasParado = Math.floor((agora - new Date(p.dataSolicitacao)) / (1000 * 60 * 60 * 24));
+        if (diasParado < 5) continue;
+        const diasDesdeUltimoAlerta = p.ultimoAlertaAtraso
+          ? Math.floor((agora - new Date(p.ultimoAlertaAtraso)) / (1000 * 60 * 60 * 24))
+          : Infinity;
+        if (diasDesdeUltimoAlerta < 5) continue;
+        try {
+          await updateDoc(doc(db, 'prioridades', p.id), { ultimoAlertaAtraso: agora.toISOString() });
+          await notifyRole('master', {
+            title: 'Prioridade parada há dias',
+            main: `Processo ${p.numeroProcesso} está parado há ${diasParado} dia(s) sem despacho.`,
+            icon: '⚠️', tab: 'prioridade', itemId: p.id,
+          });
+          if (p.atribuidoA && p.atribuidoA !== 'master') {
+            await notifyRole(p.atribuidoA, {
+              title: 'Prioridade parada há dias',
+              main: `O processo ${p.numeroProcesso}, atribuído a você, está parado há ${diasParado} dia(s) sem despacho.`,
+              icon: '⚠️', tab: 'prioridade', itemId: p.id,
+            });
+          }
+        } catch (e) { console.warn('⚠️ Falha ao notificar atraso de prioridade:', e.message); }
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [priorities, authenticated, currentUser]);
 
   // Arquivamento automático de audiências antigas: quando uma audiência já
   // ocorreu há mais de 30 dias, guarda só data + número do processo em
@@ -916,6 +1062,35 @@ export default function SistemaDespacho() {
     alert(`Usuário "${nome}" criado! No primeiro login, essa pessoa vai cadastrar e-mail e senha (ou entrar com Google).`);
   };
 
+  // Usuário externo: servidor/interessado de outro setor da SEMARH, para uso
+  // integral do sistema (login próprio via Firebase, mesmo fluxo dos internos).
+  // Por segurança, nasce só com acesso de leitura e visibilidade restrita —
+  // o master libera mais abas depois em Configuração de Funcionalidades.
+  const createExternalUser = async () => {
+    const nome = newExternalUserName.trim();
+    if (!nome) { alert('Digite o nome do usuário externo'); return; }
+    const setorFinal = newExternalUserSetor === 'outros' ? newExternalUserSetorOutro.trim() : newExternalUserSetor;
+    if (!setorFinal) { alert('Informe o setor do usuário externo'); return; }
+    const base = slugify(nome) || 'usuario';
+    let key = base, n = 2;
+    while (ALL_USERS[key]) { key = `${base}_${n}`; n++; }
+
+    const newCustom = { ...customUsers, [key]: { nome, role: key, criadoEm: new Date().toISOString(), externo: true, setor: setorFinal } };
+    const newPerms = { ...userPermissions, [key]: { ver: true, criar: false, editar: false, deletar: false, despachar: false } };
+    // Visibilidade restritiva: só Prioridade de Tramitação por padrão. O master
+    // amplia depois em Configuração de Funcionalidades, se quiser.
+    const restrictedVisibility = TABS.reduce((acc, t) => ({ ...acc, [t.id]: t.id === 'prioridade' }), {});
+    const newTabVis = Object.keys(tabVisibility).reduce((acc, tabId) => {
+      acc[tabId] = { ...tabVisibility[tabId], [key]: restrictedVisibility[tabId] === true };
+      return acc;
+    }, { ...tabVisibility });
+
+    setCustomUsers(newCustom); setUserPermissions(newPerms); setTabVisibility(newTabVis);
+    await saveConfig({ customUsers: newCustom, userPermissions: newPerms, tabVisibility: newTabVis });
+    setNewExternalUserName(''); setNewExternalUserSetorOutro('');
+    alert(`Usuário externo "${nome}" (${setorFinal}) criado! No primeiro login, essa pessoa vai cadastrar e-mail e senha (ou entrar com Google). Por padrão só enxerga a aba Prioridade de Tramitação.`);
+  };
+
   const renameUser = async (role) => {
     const atual = ALL_USERS[role]?.nome || '';
     const novo = window.prompt('Novo nome de exibição:', atual);
@@ -1015,6 +1190,74 @@ export default function SistemaDespacho() {
     signOut(auth).catch(() => {});
     setPublicViewer(false);
     setPublicDoeSelected(null);
+  };
+
+  // ─── Prioridade de Tramitação (acesso público — pedido e consulta) ──────
+  const handlePublicPriorityAccess = async () => {
+    setPublicPriorityError('');
+    setPublicPriorityLoading(true);
+    try {
+      await signInAnonymously(auth);
+      setPublicPriorityMode(true);
+      setPublicPriorityView('menu');
+    } catch (e) {
+      console.error('❌ Erro ao acessar prioridade de tramitação:', e.message);
+      setPublicPriorityError('Não foi possível abrir agora. Tente novamente em instantes.');
+    } finally {
+      setPublicPriorityLoading(false);
+    }
+  };
+
+  const handleExitPublicPriority = () => {
+    signOut(auth).catch(() => {});
+    setPublicPriorityMode(false);
+    setPublicPriorityView('menu');
+    setPublicPrioritySetorConsulta(null);
+    setPublicPrioritySuccess(false);
+    setPublicPriorityError('');
+  };
+
+  const submitPublicPriority = async (e) => {
+    e.preventDefault();
+    setPublicPriorityError('');
+    const { setor, setorOutro, servidor, objeto, numeroProcesso } = publicPriorityForm;
+    const setorFinal = setor === 'outros' ? setorOutro.trim() : setor;
+    if (!setorFinal || !servidor.trim() || !objeto.trim() || !numeroProcesso.trim()) {
+      setPublicPriorityError('Preencha todos os campos antes de enviar.');
+      return;
+    }
+    setPublicPrioritySubmitting(true);
+    try {
+      await addDoc(collection(db, 'prioridades'), {
+        setorSolicitante: setorFinal,
+        servidorSolicitante: servidor.trim(),
+        objeto: objeto.trim(),
+        numeroProcesso: numeroProcesso.trim(),
+        dataSolicitacao: new Date().toISOString(),
+        status: 'recebido',
+        atribuidoA: null,
+        dataAtribuicao: null,
+        dataDespacho: null,
+        ultimoAlertaAtraso: null,
+      });
+      // Notifica o master — só a criação do "sino" (sem tentar push, pois a
+      // sessão pública/anônima não tem permissão de ler pushSubscriptions).
+      await addDoc(collection(db, 'notificacoes'), {
+        category: 'prioridade',
+        title: 'Nova Prioridade de Tramitação',
+        main: `${setorFinal} solicitou prioridade no processo ${numeroProcesso.trim()}`,
+        secondary: objeto.trim(),
+        icon: '⭐', tab: 'prioridade', itemId: '',
+        audience: ['master'], readBy: {}, clearedBy: [], createdAt: new Date().toISOString(),
+      });
+      setPublicPrioritySuccess(true);
+      setPublicPriorityForm({ setor: SETORES_SEMARH[0], setorOutro: '', servidor: '', objeto: '', numeroProcesso: '' });
+    } catch (err) {
+      console.error('❌ Erro ao enviar solicitação de prioridade:', err.message);
+      setPublicPriorityError('Erro ao enviar a solicitação. Tente novamente.');
+    } finally {
+      setPublicPrioritySubmitting(false);
+    }
   };
 
   const can = (action) => {
@@ -1784,6 +2027,156 @@ export default function SistemaDespacho() {
     );
   }
 
+  if (publicPriorityMode) {
+    const setoresComPedidos = [...new Set(publicPriorityList.map((p) => p.setorSolicitante))].sort();
+    const listaDoSetor = publicPrioritySetorConsulta
+      ? [...publicPriorityList]
+          .filter((p) => p.setorSolicitante === publicPrioritySetorConsulta)
+          .sort((a, b) => new Date(a.dataSolicitacao) - new Date(b.dataSolicitacao))
+      : [];
+
+    return (
+      <div className="app-container">
+        <aside className="sidebar">
+          <div className="sidebar-header">
+            <div className="logo-btn" style={{cursor: 'default'}}>
+              <span className="logo-icon"><i className="ti ti-star"></i></span>
+              <div className="logo-text"><h2>ASSTEC</h2><p>Prioridade de Tramitação</p></div>
+            </div>
+          </div>
+          <nav className="sidebar-nav">
+            <button className="nav-item active">
+              <span className="icon"><i className="ti ti-star"></i></span><span className="label">Prioridade de Tramitação</span>
+            </button>
+          </nav>
+          <div className="sidebar-footer">
+            <div className="user-info" data-initial="V">
+              <p className="user-name">Visitante</p>
+              <p className="user-role">Outro setor da SEMARH</p>
+            </div>
+            <div className="sidebar-actions">
+              <button className="btn-icon" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title="Alternar tema"><i className={`ti ${theme === 'light' ? 'ti-moon' : 'ti-sun'}`}></i></button>
+              <button className="btn-icon btn-logout" onClick={handleExitPublicPriority} title="Sair"><i className="ti ti-logout"></i></button>
+            </div>
+          </div>
+        </aside>
+
+        <div className="main-wrapper">
+          <main className="main-content">
+            <div className="content-area">
+
+              {publicPriorityView === 'menu' && (
+                <div className="priority-public-menu">
+                  <h2 className="priority-public-title"><i className="ti ti-star"></i> Prioridade de Tramitação</h2>
+                  <p className="priority-public-subtitle">Solicite prioridade em um processo já em tramitação na ASSTEC, ou consulte pedidos já feitos pelo seu setor.</p>
+                  <div className="priority-public-choices">
+                    <button type="button" className="priority-public-choice" onClick={() => { setPublicPrioritySuccess(false); setPublicPriorityView('solicitar'); }}>
+                      <span className="priority-public-choice-icon"><i className="ti ti-send"></i></span>
+                      <strong>Solicitar Prioridade</strong>
+                      <span>Preencher um novo pedido de prioridade de tramitação.</span>
+                    </button>
+                    <button type="button" className="priority-public-choice" onClick={() => { setPublicPrioritySetorConsulta(null); setPublicPriorityView('consultar-setor'); }}>
+                      <span className="priority-public-choice-icon"><i className="ti ti-list-search"></i></span>
+                      <strong>Consultar Pedidos</strong>
+                      <span>Ver o andamento dos pedidos já feitos pelo seu setor.</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {publicPriorityView === 'solicitar' && (
+                <div className="detail-card priority-public-form-card">
+                  <button className="back-button" onClick={() => setPublicPriorityView('menu')}>← Voltar</button>
+                  {publicPrioritySuccess ? (
+                    <div className="priority-public-success">
+                      <span className="priority-public-success-icon"><i className="ti ti-circle-check"></i></span>
+                      <h3>Solicitação enviada com sucesso!</h3>
+                      <p>A ASSTEC foi notificada e vai analisar o pedido de prioridade em breve.</p>
+                      <button type="button" className="btn-primary" onClick={() => setPublicPriorityView('menu')}>Voltar ao início</button>
+                    </div>
+                  ) : (
+                    <form onSubmit={submitPublicPriority}>
+                      <h3 style={{marginBottom:'1.2rem'}}><i className="ti ti-send" style={{marginRight:'8px'}}></i>Solicitar Prioridade de Tramitação</h3>
+                      <div className="form-group">
+                        <label>Setor Solicitante</label>
+                        <select value={publicPriorityForm.setor} onChange={(e) => setPublicPriorityForm({ ...publicPriorityForm, setor: e.target.value })}
+                          style={{width:'100%', padding:'11px 14px', border:'1.5px solid var(--border-color)', borderRadius:'8px', fontSize:'14px', background:'var(--bg-card)', color:'var(--text-primary)'}}>
+                          {SETORES_SEMARH.map((s) => <option key={s} value={s}>{s}</option>)}
+                          <option value="outros">Outros (digitar)</option>
+                        </select>
+                      </div>
+                      {publicPriorityForm.setor === 'outros' && (
+                        <div className="form-group">
+                          <label>Nome do Setor</label>
+                          <input type="text" value={publicPriorityForm.setorOutro} onChange={(e) => setPublicPriorityForm({ ...publicPriorityForm, setorOutro: e.target.value })} placeholder="Digite o nome do setor" />
+                        </div>
+                      )}
+                      <div className="form-group">
+                        <label>Servidor Solicitante</label>
+                        <input type="text" value={publicPriorityForm.servidor} onChange={(e) => setPublicPriorityForm({ ...publicPriorityForm, servidor: e.target.value })} placeholder="Nome de quem está solicitando" />
+                      </div>
+                      <div className="form-group">
+                        <label>Objeto</label>
+                        <textarea value={publicPriorityForm.objeto} onChange={(e) => setPublicPriorityForm({ ...publicPriorityForm, objeto: e.target.value })} placeholder="Descreva o objeto do processo" />
+                      </div>
+                      <div className="form-group">
+                        <label>Número do Processo</label>
+                        <input type="text" value={publicPriorityForm.numeroProcesso} onChange={(e) => setPublicPriorityForm({ ...publicPriorityForm, numeroProcesso: e.target.value })} placeholder="Número SEI do processo" />
+                      </div>
+                      {publicPriorityError && <p className="error-message">{publicPriorityError}</p>}
+                      <button type="submit" className="btn-primary" style={{width:'100%', marginTop:'0.6rem'}} disabled={publicPrioritySubmitting}>
+                        {publicPrioritySubmitting ? 'Enviando...' : 'Submeter'}
+                      </button>
+                    </form>
+                  )}
+                </div>
+              )}
+
+              {publicPriorityView === 'consultar-setor' && (
+                <div className="list-view">
+                  <button className="back-button" onClick={() => setPublicPriorityView('menu')}>← Voltar</button>
+                  <div className="list-header"><h3>Selecione o setor</h3></div>
+                  {setoresComPedidos.length === 0 ? (
+                    <p className="empty-state">Ainda não há pedidos de prioridade registrados.</p>
+                  ) : (
+                    <div className="priority-public-sector-grid">
+                      {setoresComPedidos.map((s) => (
+                        <button key={s} type="button" className="priority-public-sector-btn" onClick={() => { setPublicPrioritySetorConsulta(s); setPublicPriorityView('consultar-lista'); }}>
+                          <i className="ti ti-building-bank"></i>{s}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {publicPriorityView === 'consultar-lista' && (
+                <div className="list-view">
+                  <button className="back-button" onClick={() => setPublicPriorityView('consultar-setor')}>← Voltar</button>
+                  <div className="list-header"><h3>Pedidos de {publicPrioritySetorConsulta}</h3></div>
+                  {listaDoSetor.length === 0 ? (
+                    <p className="empty-state">Nenhum pedido encontrado para este setor.</p>
+                  ) : (
+                    listaDoSetor.map((p) => (
+                      <div key={p.id} className="card-item priority-public-card">
+                        <div className="card-top">
+                          <strong>{p.numeroProcesso}</strong>
+                          <span className={`status-pill ${PRIORIDADE_STATUS[p.status]?.color || 'blue'}`}>{PRIORIDADE_STATUS[p.status]?.label || p.status}</span>
+                        </div>
+                        {p.objeto && <p className="card-text"><strong>Objeto:</strong> {p.objeto}</p>}
+                        <p className="card-text"><strong>Atribuído na ASSTEC:</strong> {p.atribuidoA ? (ALL_USERS[p.atribuidoA]?.nome || p.atribuidoA) : 'Ainda não atribuído'}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+
+            </div>
+          </main>
+        </div>
+      </div>
+    );
+  }
   if (!authenticated) {
     if (!authChecked || !configLoaded) {
       // Evita o "flash" da tela errada enquanto o Firebase confere se já existe
@@ -1852,7 +2245,7 @@ export default function SistemaDespacho() {
             <label htmlFor="usuario">Usuário</label>
             <select id="usuario" value={loginUser} onChange={(e) => { setLoginUser(e.target.value); setForgotMsg(''); setLoginPass(''); }} className="login-input">
               {Object.entries(ALL_USERS).map(([role, info]) => (
-                <option key={role} value={role}>{role === 'master' ? 'Master' : info.nome}</option>
+                <option key={role} value={role}>{role === 'master' ? 'Master' : info.nome}{info.externo ? ` (Externo — ${info.setor})` : ''}</option>
               ))}
             </select>
           </div>
@@ -1880,10 +2273,15 @@ export default function SistemaDespacho() {
             <i className="ti ti-news"></i> {publicAccessLoading ? 'Abrindo...' : 'Consulta Pública ao Diário Oficial'}
           </button>
           {publicAccessError && <p className="login-footer" style={{color:'var(--accent-red)'}}>{publicAccessError}</p>}
+          <button type="button" className="link-btn link-btn-gold" style={{width:'100%', justifyContent:'center', marginTop:'10px'}} onClick={handlePublicPriorityAccess} disabled={publicPriorityLoading}>
+            <i className="ti ti-star"></i> {publicPriorityLoading ? 'Abrindo...' : 'Pedido de Prioridade na Tramitação de Processos SEI'}
+          </button>
+          {publicPriorityError && !publicPriorityMode && <p className="login-footer" style={{color:'var(--accent-red)'}}>{publicPriorityError}</p>}
         </form>
       </div>
     );
   }
+
 
   return (
     <div className="app-container">
@@ -1949,6 +2347,9 @@ export default function SistemaDespacho() {
                 })
                 .filter((acc) => acc.dataUltimaEdicao && new Date(acc.dataUltimaEdicao) >= limiteMovimentacao)
                 .sort((a, b) => new Date(b.dataUltimaEdicao) - new Date(a.dataUltimaEdicao));
+              const prioridadesPendentes = [...priorities]
+                .filter((p) => p.status !== 'despachado')
+                .sort((a, b) => new Date(a.dataSolicitacao) - new Date(b.dataSolicitacao));
 
               return (
                 <div className="list-view">
@@ -1981,6 +2382,13 @@ export default function SistemaDespacho() {
                         <span className="kpi-icon kpi-icon--success"><i className="ti ti-map-pin"></i></span>
                         <span className="kpi-value">{acompanhamentosMovimentados.length}</span>
                         <span className="kpi-label">Acompanhamentos movimentados</span>
+                      </button>
+                    )}
+                    {dashboardConfig.showPrioridade && tabVisible('prioridade') && (
+                      <button type="button" className="kpi-card" onClick={() => setActiveTab('prioridade')}>
+                        <span className="kpi-icon kpi-icon--priority"><i className="ti ti-star"></i></span>
+                        <span className="kpi-value">{prioridadesPendentes.length}</span>
+                        <span className="kpi-label">Prioridade de Tramitação</span>
                       </button>
                     )}
                   </div>
@@ -2023,6 +2431,31 @@ export default function SistemaDespacho() {
                             {acc.status && <p className="card-text"><strong>Status:</strong> {acc.status.substring(0, 100)}</p>}
                           </div>
                         ))
+                      )}
+                    </div>
+                  )}
+
+                  {dashboardConfig.showPrioridade && tabVisible('prioridade') && (
+                    <div className="dashboard-widget">
+                      <h4><i className="ti ti-star"></i> Prioridade de Tramitação</h4>
+                      {prioridadesPendentes.length === 0 ? (
+                        <p className="dashboard-empty">Nenhum pedido de prioridade pendente.</p>
+                      ) : (
+                        prioridadesPendentes.slice(0, 8).map((p) => {
+                          const urgencia = priorityUrgency(p);
+                          const corBorda = urgencia === 'crit' ? 'var(--accent-red)' : urgencia === 'warn' ? 'var(--accent-warning)' : 'var(--primary-light)';
+                          return (
+                            <div key={p.id} onClick={() => { setActiveTab('prioridade'); setSelectedPriority(p); }}
+                              className="card-item" style={{ borderLeft: `4px solid ${corBorda}` }}>
+                              <div className="card-top">
+                                <strong>{p.numeroProcesso}</strong>
+                                <span className={`status-pill ${PRIORIDADE_STATUS[p.status]?.color || 'blue'}`}>{PRIORIDADE_STATUS[p.status]?.label || p.status}</span>
+                              </div>
+                              <p className="card-text"><strong>Setor:</strong> {p.setorSolicitante}</p>
+                              {p.objeto && <p className="card-text">{p.objeto.substring(0, 100)}</p>}
+                            </div>
+                          );
+                        })
                       )}
                     </div>
                   )}
@@ -2866,6 +3299,87 @@ export default function SistemaDespacho() {
                 )}
               </>
             )}
+
+            {activeTab === 'prioridade' && (
+              <>
+                {selectedPriority ? (
+                  <div className="detail-card">
+                    <button className="back-button" onClick={() => setSelectedPriority(null)}>← Voltar</button>
+                    <div className="card-header">
+                      <h2><i className="ti ti-star" style={{marginRight:'8px', color:'var(--accent-gold-dark)'}}></i>{selectedPriority.numeroProcesso}</h2>
+                      <span className={`status-pill ${PRIORIDADE_STATUS[selectedPriority.status]?.color || 'blue'}`}>
+                        {PRIORIDADE_STATUS[selectedPriority.status]?.label || selectedPriority.status}
+                      </span>
+                    </div>
+                    <div className="info-grid">
+                      <div className="info-item"><label>Setor Solicitante</label><p>{selectedPriority.setorSolicitante}</p></div>
+                      <div className="info-item"><label>Servidor Solicitante</label><p>{selectedPriority.servidorSolicitante}</p></div>
+                      <div className="info-item"><label>Data da Solicitação</label><p>{new Date(selectedPriority.dataSolicitacao).toLocaleDateString('pt-BR')}</p></div>
+                      <div className="info-item"><label>Atribuído a</label><p>{selectedPriority.atribuidoA ? (ALL_USERS[selectedPriority.atribuidoA]?.nome || selectedPriority.atribuidoA) : 'Ainda não atribuído'}</p></div>
+                    </div>
+                    {selectedPriority.objeto && <div className="info-box"><label>Objeto</label><p>{selectedPriority.objeto}</p></div>}
+
+                    {currentUser === 'master' && (
+                      <div className="form-section">
+                        <div className="form-group">
+                          <label>Atribuir a (ASSTEC)</label>
+                          <select
+                            value={selectedPriority.atribuidoA || ''}
+                            onChange={(e) => e.target.value && assignPriority(selectedPriority.id, e.target.value)}
+                            style={{width:'100%', padding:'10px 12px', border:'1px solid var(--neutral-300)', borderRadius:'8px', fontSize:'14px', background:'var(--bg-card)', color:'var(--text-primary)'}}
+                          >
+                            <option value="" disabled>Selecione...</option>
+                            <option value="master">Master (eu)</option>
+                            <option value="servidora">Isamayla</option>
+                            <option value="estagiaria">Maria Clara</option>
+                          </select>
+                        </div>
+                      </div>
+                    )}
+
+                    {selectedPriority.status !== 'despachado' && (currentUser === 'master' || currentUser === selectedPriority.atribuidoA) && (
+                      <button className="btn-primary" onClick={() => dispatchPriority(selectedPriority.id)}>
+                        <i className="ti ti-check" style={{marginRight:'6px'}}></i>Marcar como Despachado
+                      </button>
+                    )}
+                    {currentUser === 'master' && (
+                      <button className="btn-delete" onClick={() => deletePriority(selectedPriority.id)}>
+                        <i className="ti ti-trash" style={{marginRight:'6px'}}></i>Remover Pedido
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="list-view">
+                    <div className="list-header">
+                      <h3><i className="ti ti-star" style={{marginRight:'8px'}}></i>Prioridade de Tramitação</h3>
+                    </div>
+                    {priorities.length === 0 ? (
+                      <p className="empty-state">Nenhum pedido de prioridade recebido ainda.</p>
+                    ) : (
+                      [...priorities].sort((a, b) => new Date(a.dataSolicitacao) - new Date(b.dataSolicitacao)).map((p) => {
+                        const urgencia = priorityUrgency(p);
+                        const corBorda = urgencia === 'crit' ? 'var(--accent-red)' : urgencia === 'warn' ? 'var(--accent-warning)' : 'var(--primary-light)';
+                        const dias = Math.floor((new Date() - new Date(p.dataSolicitacao)) / (1000 * 60 * 60 * 24));
+                        return (
+                          <div key={p.id} onClick={() => setSelectedPriority(p)} className={`card-item priority-card ${urgencia !== 'normal' && urgencia !== 'ok' ? `priority-card-${urgencia}` : ''}`} style={{ borderLeft: `4px solid ${corBorda}` }}>
+                            <div className="card-top">
+                              <strong>{p.numeroProcesso}</strong>
+                              <span className={`status-pill ${PRIORIDADE_STATUS[p.status]?.color || 'blue'}`}>{PRIORIDADE_STATUS[p.status]?.label || p.status}</span>
+                            </div>
+                            <p className="card-text"><strong>Setor:</strong> {p.setorSolicitante}</p>
+                            {p.objeto && <p className="card-text"><strong>Objeto:</strong> {p.objeto.substring(0, 120)}</p>}
+                            <p className="card-text">
+                              <strong>Atribuído a:</strong> {p.atribuidoA ? (ALL_USERS[p.atribuidoA]?.nome || p.atribuidoA) : 'Não atribuído'}
+                              {' · '}{dias} dia(s) desde a solicitação
+                            </p>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </main>
       </div>
@@ -2965,6 +3479,7 @@ export default function SistemaDespacho() {
                             { key: 'showPrazos', label: 'Prazos Vencendo' },
                             { key: 'showAudiencias', label: 'Audiências da Semana' },
                             { key: 'showAcompanhamentos', label: 'Acompanhamentos Movimentados' },
+                            { key: 'showPrioridade', label: 'Prioridade de Tramitação' },
                           ].map(({ key, label }) => {
                             const checked = dashboardConfig[key] !== false;
                             const toggle = () => {
@@ -3071,6 +3586,7 @@ export default function SistemaDespacho() {
                         { key: 'acompanhamentosAsstec', label: 'Acompanhamento ASSTEC', icon: 'ti-building', desc: 'quando atualizado' },
                         { key: 'doe',             label: 'DOE/PI', icon: 'ti-news', desc: 'nova publicação' },
                         { key: 'prazos',          label: 'Prazos Judiciais', icon: 'ti-scale', desc: '10, 5, 3 e 2 dias antes' },
+                        { key: 'prioridade',      label: 'Prioridade de Tramitação', icon: 'ti-star', desc: 'novo pedido, atribuição e atraso (a cada 5 dias)' },
                         { key: 'despachoCriacao', label: 'Despachos — Criação', icon: 'ti-gavel', desc: 'quando um novo despacho é criado' },
                         { key: 'despachoStatus',  label: 'Despachos — Alteração', icon: 'ti-gavel', desc: 'autorizado, diligência ou negado' },
                       ].map(({ key, label, icon, desc }) => (
@@ -3176,7 +3692,7 @@ export default function SistemaDespacho() {
                         </div>
                       </div>
 
-                      {Object.entries(ALL_USERS).map(([role, info]) => (
+                      {Object.entries(ALL_USERS).filter(([, info]) => !info.externo).map(([role, info]) => (
                         <div key={role} className="push-config-block">
                           <div className="push-config-title">
                             <strong><i className="ti ti-user" style={{marginRight:'6px'}}></i>{info.nome}</strong>
@@ -3208,6 +3724,80 @@ export default function SistemaDespacho() {
                           </div>
                         </div>
                       ))}
+                    </div>
+                  )}
+
+                  {/* Usuários Externos: servidores/interessados de outros setores da SEMARH */}
+                  <button
+                    className={`settings-accordion-btn ${settingsPanel === 'external' ? 'open' : ''}`}
+                    onClick={() => setSettingsPanel(settingsPanel === 'external' ? null : 'external')}
+                  >
+                    <span><i className="ti ti-building-community" style={{marginRight:'8px'}}></i>Usuários Externos</span>
+                    <i className={`ti ${settingsPanel === 'external' ? 'ti-chevron-up' : 'ti-chevron-down'}`}></i>
+                  </button>
+                  {settingsPanel === 'external' && (
+                    <div className="settings-accordion-body">
+                      <p style={{fontSize:'12px', color:'var(--text-secondary)', marginBottom:'1rem', lineHeight:'1.5'}}>
+                        Servidores e interessados de outros setores da SEMARH (fora o gabinete da ASSTEC). Entram com
+                        login próprio, igual aos usuários internos, mas nascem com acesso restrito — por padrão só
+                        veem a aba Prioridade de Tramitação. Amplie o acesso em Configuração de Funcionalidades, se quiser.
+                      </p>
+
+                      <div className="push-config-block" style={{marginBottom:'1.2rem'}}>
+                        <div className="push-config-title"><strong><i className="ti ti-user-plus" style={{marginRight:'6px'}}></i>Criar usuário externo</strong></div>
+                        <div style={{display:'flex', gap:'8px', flexWrap:'wrap', alignItems:'center'}}>
+                          <div className="form-group" style={{flex:'1', minWidth:'180px', marginBottom:0}}>
+                            <input type="text" value={newExternalUserName} onChange={(e) => setNewExternalUserName(e.target.value)}
+                              placeholder="Nome completo da pessoa" />
+                          </div>
+                          <select value={newExternalUserSetor} onChange={(e) => setNewExternalUserSetor(e.target.value)}
+                            style={{padding:'11px 12px', border:'1.5px solid var(--border-color)', borderRadius:'8px', fontSize:'13px', background:'var(--bg-card)', color:'var(--text-primary)'}}>
+                            {SETORES_SEMARH.map((s) => <option key={s} value={s}>{s}</option>)}
+                            <option value="outros">Outros</option>
+                          </select>
+                          {newExternalUserSetor === 'outros' && (
+                            <div className="form-group" style={{flex:'1', minWidth:'140px', marginBottom:0}}>
+                              <input type="text" value={newExternalUserSetorOutro} onChange={(e) => setNewExternalUserSetorOutro(e.target.value)} placeholder="Nome do setor" />
+                            </div>
+                          )}
+                          <button type="button" className="btn-primary" style={{flex:'0 0 auto', marginTop:0}} onClick={createExternalUser}>Criar</button>
+                        </div>
+                      </div>
+
+                      {Object.entries(ALL_USERS).filter(([, info]) => info.externo).length === 0 ? (
+                        <p className="empty-state" style={{padding:'1rem 0'}}>Nenhum usuário externo cadastrado ainda.</p>
+                      ) : (
+                        Object.entries(ALL_USERS).filter(([, info]) => info.externo).map(([role, info]) => (
+                          <div key={role} className="push-config-block">
+                            <div className="push-config-title">
+                              <strong><i className="ti ti-user" style={{marginRight:'6px'}}></i>{info.nome}</strong>
+                              <span style={{marginLeft:'10px', fontSize:'12px', color:'var(--text-secondary)'}}>
+                                {info.setor} — {userEmails[role] ? userEmails[role] : 'E-mail ainda não cadastrado'}
+                              </span>
+                            </div>
+                            <div className="push-config-users">
+                              <button type="button" className="link-btn" onClick={() => renameUser(role)}>
+                                <i className="ti ti-edit"></i> Renomear
+                              </button>
+                              <button type="button" className="link-btn" disabled={!userEmails[role]}
+                                onClick={() => sendResetTo(role)}>
+                                <i className="ti ti-mail"></i> Enviar redefinição de senha
+                              </button>
+                              <button type="button" className="link-btn" onClick={() => forceRoleReRegister(role)}>
+                                <i className="ti ti-refresh"></i> Forçar novo cadastro
+                              </button>
+                              {userEmails[role] && (
+                                <button type="button" className="link-btn" onClick={() => clearUserEmail(role)}>
+                                  <i className="ti ti-x"></i> Limpar e-mail
+                                </button>
+                              )}
+                              <button type="button" className="link-btn" onClick={() => deleteCustomUser(role)}>
+                                <i className="ti ti-trash"></i> Remover usuário
+                              </button>
+                            </div>
+                          </div>
+                        ))
+                      )}
                     </div>
                   )}
 

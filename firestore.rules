@@ -16,8 +16,24 @@ service cloud.firestore {
       allow read: if request.auth != null;
       allow write: if request.auth != null && request.auth.token.email != null;
     }
+    // Prioridade de Tramitação: outros setores da SEMARH solicitam e consultam
+    // pela tela de login (sessão anônima), sem precisar de conta no sistema.
+    // Atribuir, mudar status ou apagar continua exigindo login real da ASSTEC.
+    match /prioridades/{docId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update, delete: if request.auth != null && request.auth.token.email != null;
+    }
+    // Notificações: a solicitação pública de prioridade precisa avisar o master
+    // (cria um documento novo); ler, marcar como lida ou apagar continua
+    // exigindo login real.
+    match /notificacoes/{docId} {
+      allow read: if request.auth != null && request.auth.token.email != null;
+      allow create: if request.auth != null;
+      allow update, delete: if request.auth != null && request.auth.token.email != null;
+    }
     // Todo o resto (processos, acompanhamentos, audiencias, prazos,
-    // pushSubscriptions, notificacoes...) exige login real do usuário.
+    // pushSubscriptions...) exige login real do usuário.
     match /{document=**} {
       allow read, write: if request.auth != null && request.auth.token.email != null;
     }
