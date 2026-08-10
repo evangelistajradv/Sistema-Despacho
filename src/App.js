@@ -3194,6 +3194,33 @@ export default function SistemaDespacho() {
                       <span>{new Date(selectedDoe.dataPublicacao).toLocaleDateString('pt-BR')}</span>
                     </div>
                     <div className="doe-reading-content" dangerouslySetInnerHTML={{ __html: formatDoeContent(selectedDoe.conteudo) }} />
+                    {(selectedDoe.pdfUrl || (selectedDoe.documentos || []).length > 0) && (
+                      <div className="doe-reading-pdf">
+                        <span className="doe-reading-pdf-label">📎 DOE Completo (PDF)</span>
+                        {selectedDoe.pdfUrl && (
+                          <div className="doe-reading-pdf-actions">
+                            <a href={selectedDoe.pdfUrl} target="_blank" rel="noopener noreferrer" className="doe-reading-pdf-btn">
+                              <i className="ti ti-file-type-pdf"></i> Visualizar
+                            </a>
+                            <a href={selectedDoe.pdfUrl} download={selectedDoe.pdfNome || 'DOE.pdf'} className="doe-reading-pdf-btn doe-reading-pdf-btn-outline">
+                              <i className="ti ti-download"></i> Baixar
+                            </a>
+                          </div>
+                        )}
+                        {(selectedDoe.documentos || []).map((docItem, i) => (
+                          <div className="doe-reading-pdf-actions" key={i}>
+                            <a href={docItem.url} target="_blank" rel="noopener noreferrer" className="doe-reading-pdf-btn">
+                              <i className={`ti ${docItem.tipo === 'link' ? 'ti-link' : 'ti-file-type-pdf'}`}></i> {docItem.nome || 'Visualizar'}
+                            </a>
+                            {docItem.tipo !== 'link' && (
+                              <a href={docItem.url} download={docItem.nome || 'documento.pdf'} className="doe-reading-pdf-btn doe-reading-pdf-btn-outline">
+                                <i className="ti ti-download"></i> Baixar
+                              </a>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ) : selectedDoe ? (
                   <div className="detail-card">

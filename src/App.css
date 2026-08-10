@@ -2690,6 +2690,47 @@ button, input, select, textarea {
   color: var(--text-primary) !important;
 }
 
+.doe-reading-pdf {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.doe-reading-pdf-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.doe-reading-pdf-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.doe-reading-pdf-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: var(--primary-main);
+  color: white;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  border: none;
+}
+
+.doe-reading-pdf-btn-outline {
+  background: transparent;
+  color: var(--primary-main);
+  border: 1px solid var(--primary-main);
+}
+
 /* ═══════════════════════════════════════════════════════════════ */
 /* PUSH NOTIFICATION CONFIG (painel master)                       */
 /* ═══════════════════════════════════════════════════════════════ */
