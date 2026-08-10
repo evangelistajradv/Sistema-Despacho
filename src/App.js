@@ -172,14 +172,25 @@ export default function SistemaDespacho() {
 
   // Prazos Judiciais
   const [deadlines, setDeadlines] = useState([]);
+  const [deadlineHistorico, setDeadlineHistorico] = useState([]); // prazos concluídos: só número do processo + data de conclusão
+  const [showDeadlineHistorico, setShowDeadlineHistorico] = useState(false);
+  const [confirmConcludeDeadline, setConfirmConcludeDeadline] = useState(null); // prazo aguardando confirmação de conclusão
   const [selectedDeadline, setSelectedDeadline] = useState(null);
   const [newDeadlineMode, setNewDeadlineMode] = useState(false);
-  const [newDeadline, setNewDeadline] = useState({ numeroPJE: '', numeroSEI: '', prazoFatal: '', tipoPrazo: 'longo', objeto: '' });
+  const [newDeadline, setNewDeadline] = useState({ numeroPJE: '', numeroSEI: '', prazoFatal: '', tipoPrazo: 'longo', objeto: '', responsaveis: [] });
   // Edição inline de prazos judiciais
   const [deadlineEdits, setDeadlineEdits] = useState({});
 
   // Edição inline de audiências
   const [hearingEdits, setHearingEdits] = useState({});
+
+  // Detecção de mobile — usada para o modo de leitura em tela cheia do DOE/PI
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  useEffect(() => {
+    const handler = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }, []);
 
   const [dashboardConfig, setDashboardConfig] = useState(DEFAULT_DASHBOARD_CONFIG);
 
@@ -387,6 +398,40 @@ export default function SistemaDespacho() {
         }
       }
     } catch (e) { console.warn('⚠️ notifyRole falhou:', e.message); }
+  };
+
+  // Notifica um conjunto específico de usuários (sino sempre; push só para quem
+  // tiver a categoria habilitada em Configurações → Notificações).
+  // Usada pelos Prazos Judiciais com servidores designados: restringe a audiência
+  // do sino/push aos responsáveis atribuídos + master, em vez de todo o grupo
+  // configurado globalmente para a categoria (como faz createNotification).
+  const notifyRoles = async (roles, { title, main, secondary, icon, tab, itemId }) => {
+    try {
+      if (!roles || roles.length === 0) return;
+      const ref = await addDoc(collection(db, 'notificacoes'), {
+        category: 'prazos',
+        title: title || '', main: main || '', secondary: secondary || '',
+        icon: icon || '⚖️', tab: tab || '', itemId: itemId || '',
+        audience: roles, readBy: {}, clearedBy: [], createdAt: new Date().toISOString(),
+      });
+      const pushRoles = roles.filter((r) => pushNotifConfig['prazos']?.[r]);
+      if (pushRoles.length && process.env.REACT_APP_VAPID_PUBLIC_KEY) {
+        const allSubs = [];
+        for (const role of pushRoles) {
+          const snap = await getDoc(doc(db, 'pushSubscriptions', role));
+          if (snap.exists()) allSubs.push(...(snap.data().subscriptions || []));
+        }
+        if (allSubs.length) {
+          await fetch('/api/send-push', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              subscriptions: allSubs,
+              notification: { title: title || 'ASSTEC', body: `${main || ''}${secondary ? '\n' + secondary : ''}`.substring(0, 150), tab: tab || '', itemId: itemId || '', tag: ref.id, notifId: ref.id },
+            }),
+          });
+        }
+      }
+    } catch (e) { console.warn('⚠️ notifyRoles falhou:', e.message); }
   };
 
   // ─── Prioridade de Tramitação (master atribui; qualquer um dos dois marca despachado) ──
@@ -729,13 +774,18 @@ export default function SistemaDespacho() {
       (snap) => { setDeadlines(snap.docs.map(d => ({ id: d.id, ...d.data() }))); },
       (err) => { console.error('❌ Erro prazos Firebase:', err.message); }
     );
+    const unsubDeadlinesHist = onSnapshot(
+      collection(db, 'prazosHistorico'),
+      (snap) => { setDeadlineHistorico(snap.docs.map(d => ({ id: d.id, ...d.data() }))); },
+      (err) => { console.error('❌ Erro histórico de prazos Firebase:', err.message); }
+    );
     const unsubPriorities = onSnapshot(
       collection(db, 'prioridades'),
       (snap) => { setPriorities(snap.docs.map(d => ({ id: d.id, ...d.data() }))); },
       (err) => { console.error('❌ Erro prioridades Firebase:', err.message); }
     );
 
-    return () => { unsubProcesses(); unsubAcc(); unsubHearings(); unsubHearingsHist(); unsubDoe(); unsubDeadlines(); unsubPriorities(); };
+    return () => { unsubProcesses(); unsubAcc(); unsubHearings(); unsubHearingsHist(); unsubDoe(); unsubDeadlines(); unsubDeadlinesHist(); unsubPriorities(); };
   }, [authenticated]);
 
   // Consulta Pública: assina só a coleção do DOE/PI, independente do login
@@ -1117,13 +1167,25 @@ export default function SistemaDespacho() {
     });
   };
 
+  // Ao abrir a aba 'doe' via clique em notificação (push nativo ou link com
+  // ?tab=doe&itemId=...) com o item específico informado, seleciona esse item
+  // automaticamente — no celular, isso abre direto o modo de leitura em tela cheia.
+  const openDoeFromNotification = async (itemId) => {
+    if (!itemId) return;
+    try {
+      const snap = await getDoc(doc(db, 'doe', itemId));
+      if (snap.exists()) setSelectedDoe({ id: snap.id, ...snap.data() });
+    } catch (e) { console.warn('⚠️ Erro ao abrir DOE pela notificação:', e.message); }
+  };
+
   // Navegação a partir do clique em notificação push (service worker envia mensagem)
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return;
     const handler = (event) => {
       if (event.data?.type === 'NAVIGATE') {
-        const { tab, notifId } = event.data;
+        const { tab, itemId, notifId } = event.data;
         if (tab) setActiveTab(tab);
+        if (tab === 'doe' && itemId) openDoeFromNotification(itemId);
         // clicar no push do celular marca a notificação como lida no sino também
         if (notifId && currentUser) {
           updateDoc(doc(db, 'notificacoes', notifId), { [`readBy.${currentUser}`]: true })
@@ -1133,6 +1195,7 @@ export default function SistemaDespacho() {
     };
     navigator.serviceWorker.addEventListener('message', handler);
     return () => navigator.serviceWorker.removeEventListener('message', handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser]);
 
   // Navega para aba correta se app foi aberto por clique em notificação (?tab=...)
@@ -1141,11 +1204,14 @@ export default function SistemaDespacho() {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get('tab');
     if (tab) setActiveTab(tab);
+    const itemId = params.get('itemId');
+    if (tab === 'doe' && itemId) openDoeFromNotification(itemId);
     const notifId = params.get('notifId');
     if (notifId && currentUser) {
       updateDoc(doc(db, 'notificacoes', notifId), { [`readBy.${currentUser}`]: true })
         .catch(() => {});
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authenticated, currentUser]);
 
   // Se a aba ativa não for permitida para o usuário, redireciona para a primeira visível
@@ -1820,22 +1886,32 @@ export default function SistemaDespacho() {
         const notifDays = isShort ? [5, 3, 2] : [10, 5, 3];
         const flagMap = { 10: 'notificado10dias', 5: 'notificado5dias', 3: 'notificado3dias', 2: 'notificado2dias' };
 
+        // Somente os servidores designados para este prazo (+ o master) recebem a notificação.
+        // Se nenhum servidor foi designado, mantém o comportamento anterior (notifica o grupo configurado).
+        const responsaveis = dl.responsaveis || [];
+        const notifyTargets = responsaveis.length > 0 ? Array.from(new Set([...responsaveis, 'master'])) : null;
+
         for (const d of notifDays) {
           if (daysLeft === d && !dl[flagMap[d]]) {
             try {
               // marca o flag primeiro (evita duplicidade entre dispositivos)
               await updateDoc(doc(db, 'prazos', dl.id), { [flagMap[d]]: true });
-              if (notifEnabled('prazos')) {
+              if ((!notifyTargets || notifyTargets.includes(currentUser)) && notifEnabled('prazos')) {
                 addBanner(`⚖️ Prazo ${dl.numeroPJE || dl.numeroSEI} vence em ${d} dia(s)!`, 'warning');
               }
-              createNotification('prazos', {
+              const notifData = {
                 title: `⚖️ Prazo Judicial — ${d} dia(s)`,
                 icon: '⚖️',
                 main: `Processo ${dl.numeroPJE || dl.numeroSEI}`,
                 secondary: `${dl.objeto ? dl.objeto.substring(0, 80) + ' — ' : ''}Vence em ${new Date(dl.prazoFatal).toLocaleDateString('pt-BR')}`,
                 tab: 'prazos',
                 itemId: dl.id,
-              });
+              };
+              if (notifyTargets) {
+                notifyRoles(notifyTargets, notifData);
+              } else {
+                createNotification('prazos', notifData);
+              }
             } catch (e) { console.warn('⚠️ Erro ao marcar flag prazo:', e.message); }
           }
         }
@@ -1900,7 +1976,7 @@ export default function SistemaDespacho() {
         notificado10dias: false, notificado5dias: false,
         notificado3dias: false, notificado2dias: false
       });
-      setNewDeadline({ numeroPJE: '', numeroSEI: '', prazoFatal: '', tipoPrazo: 'longo', objeto: '' });
+      setNewDeadline({ numeroPJE: '', numeroSEI: '', prazoFatal: '', tipoPrazo: 'longo', objeto: '', responsaveis: [] });
       setNewDeadlineMode(false);
     } catch (e) { console.error('❌ Erro:', e.message); alert('Erro ao salvar. Verifique as regras do Firebase.'); }
     finally { setLoading(false); }
@@ -1911,6 +1987,31 @@ export default function SistemaDespacho() {
   const updateDeadline = async (id, updatedData) => {
     await updateDoc(doc(db, 'prazos', id), updatedData);
     setSelectedDeadline((prev) => (prev && prev.id === id ? { ...prev, ...updatedData } : prev));
+  };
+
+  const toggleNewDeadlineResponsavel = (role) => {
+    setNewDeadline((prev) => {
+      const list = prev.responsaveis || [];
+      return { ...prev, responsaveis: list.includes(role) ? list.filter((r) => r !== role) : [...list, role] };
+    });
+  };
+
+  // Marca a demanda como concluída: grava apenas número do processo + data de
+  // conclusão no histórico e remove o prazo da lista de prazos ativos.
+  const concludeDeadline = async (dl) => {
+    try {
+      await addDoc(collection(db, 'prazosHistorico'), {
+        numeroProcesso: dl.numeroPJE || dl.numeroSEI || '',
+        dataConclusao: new Date().toISOString().split('T')[0],
+      });
+      await deleteDoc(doc(db, 'prazos', dl.id));
+      setSelectedDeadline(null);
+      setConfirmConcludeDeadline(null);
+      addBanner(`✅ Demanda ${dl.numeroPJE || dl.numeroSEI} concluída`, 'success');
+    } catch (e) {
+      console.error('❌ Erro ao concluir prazo:', e.message);
+      alert('Erro ao concluir. Verifique as regras do Firebase.');
+    }
   };
 
   // Troca de senha via Firebase Authentication: precisa reautenticar com a
@@ -3082,6 +3183,18 @@ export default function SistemaDespacho() {
                       <button className="btn-secondary" disabled={loading} onClick={() => {setNewDoeMode(false); setNewDoe({ dataPublicacao: '', dataDisponibilizacao: '', numeroDiario: '', conteudo: '' }); setNewDoeDocs([]);}}>Cancelar</button>
                     </div>
                   </div>
+                ) : selectedDoe && isMobile ? (
+                  <div className="doe-reading-mode">
+                    <div className="doe-reading-topbar">
+                      <span className="doe-reading-badge">📖 Modo de Leitura</span>
+                      <button className="doe-reading-close" onClick={() => setSelectedDoe(null)}>✕ Fechar modo de leitura e retornar ao sistema</button>
+                    </div>
+                    <div className="doe-reading-meta">
+                      <strong>Diário #{selectedDoe.numeroDiario || 'S/N'}</strong>
+                      <span>{new Date(selectedDoe.dataPublicacao).toLocaleDateString('pt-BR')}</span>
+                    </div>
+                    <div className="doe-reading-content" dangerouslySetInnerHTML={{ __html: formatDoeContent(selectedDoe.conteudo) }} />
+                  </div>
                 ) : selectedDoe ? (
                   <div className="detail-card">
                     <button className="back-button" onClick={() => { setSelectedDoe(null); setDoeEdits({}); }}>← Voltar</button>
@@ -3203,9 +3316,26 @@ export default function SistemaDespacho() {
                         </select>
                       </div>
                     </div>
+                    <div className="form-group">
+                      <label>Servidores para Acompanhamento e Notificação</label>
+                      <p style={{fontSize: '12px', color: 'var(--neutral-600)', marginBottom: '8px'}}>
+                        Somente os selecionados (+ o master) receberão as notificações deste prazo, nos mesmos prazos de aviso definidos acima. Se ninguém for selecionado, todos recebem (comportamento padrão).
+                      </p>
+                      <div className="push-config-users">
+                        {Object.entries(ALL_USERS).map(([role, info]) => {
+                          const checked = (newDeadline.responsaveis || []).includes(role);
+                          return (
+                            <label key={role} className={`push-user-chip ${checked ? 'active' : ''}`}>
+                              <input type="checkbox" checked={checked} onChange={() => toggleNewDeadlineResponsavel(role)} style={{display:'none'}} />
+                              {info.nome}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
                     <div className="form-actions">
                       <button className="btn-primary" onClick={createNewDeadline} disabled={loading}>{loading ? 'Salvando...' : 'Criar'}</button>
-                      <button className="btn-secondary" disabled={loading} onClick={() => { setNewDeadlineMode(false); setNewDeadline({ numeroPJE: '', numeroSEI: '', prazoFatal: '', tipoPrazo: 'longo', objeto: '' }); }}>Cancelar</button>
+                      <button className="btn-secondary" disabled={loading} onClick={() => { setNewDeadlineMode(false); setNewDeadline({ numeroPJE: '', numeroSEI: '', prazoFatal: '', tipoPrazo: 'longo', objeto: '', responsaveis: [] }); }}>Cancelar</button>
                     </div>
                   </div>
                 ) : selectedDeadline ? (
@@ -3265,7 +3395,32 @@ export default function SistemaDespacho() {
                         {selectedDeadline.objeto && <div className="info-box"><label>Objeto</label><p>{selectedDeadline.objeto}</p></div>}
                       </>
                     )}
-                    {can('deletar') && (<button className="btn-delete" onClick={() => deleteDeadline(selectedDeadline.id)}>🗑️ Deletar</button>)}
+                    <div className="info-box">
+                      <label>Servidores para Acompanhamento e Notificação</label>
+                      <p style={{fontSize: '12px', color: 'var(--neutral-600)', margin: '4px 0 8px'}}>
+                        Somente os selecionados (+ o master) recebem notificações deste prazo. Ninguém selecionado = todos recebem.
+                      </p>
+                      <div className="push-config-users">
+                        {Object.entries(ALL_USERS).map(([role, info]) => {
+                          const checked = (selectedDeadline.responsaveis || []).includes(role);
+                          const toggle = () => {
+                            const list = selectedDeadline.responsaveis || [];
+                            const updated = list.includes(role) ? list.filter((r) => r !== role) : [...list, role];
+                            updateDeadline(selectedDeadline.id, { responsaveis: updated });
+                          };
+                          return (
+                            <label key={role} className={`push-user-chip ${checked ? 'active' : ''}`}>
+                              <input type="checkbox" checked={checked} onChange={toggle} style={{display:'none'}} />
+                              {info.nome}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div className="action-buttons">
+                      <button className="btn-approve" onClick={() => setConfirmConcludeDeadline(selectedDeadline)}>✅ Demanda Concluída</button>
+                      {can('deletar') && (<button className="btn-delete" onClick={() => deleteDeadline(selectedDeadline.id)}>🗑️ Deletar</button>)}
+                    </div>
                   </div>
                 ) : (
                   <div className="list-view">
@@ -3273,6 +3428,7 @@ export default function SistemaDespacho() {
                       <h3>Controle de Prazos Judiciais</h3>
                       <div className="header-buttons">
                         <button className="btn-settings" onClick={exportarPrazosPdf}>🖨️ Exportar PDF</button>
+                        <button className="btn-settings" onClick={() => setShowDeadlineHistorico(true)}>📜 Histórico de Concluídos</button>
                         {can('criar') && (<button className="btn-new" onClick={() => setNewDeadlineMode(true)}>+ Novo Prazo</button>)}
                       </div>
                     </div>
@@ -3280,21 +3436,68 @@ export default function SistemaDespacho() {
                       [...deadlines].sort((a, b) => new Date(a.prazoFatal) - new Date(b.prazoFatal)).map(dl => {
                         const { vencido, urgente, cor, label } = prazoStatus(dl.prazoFatal);
                         return (
-                          <div key={dl.id} onClick={() => { setSelectedDeadline(dl); setDeadlineEdits({}); }} className="card-item" style={{ borderLeft: `4px solid ${cor}` }}>
-                            <div className="card-top">
-                              <strong>{dl.numeroPJE || dl.numeroSEI}</strong>
-                              <span className={`badge ${vencido ? 'status-indeferido' : urgente ? 'status-diligencia' : 'status-pendente'}`}>
-                                {label}
-                              </span>
+                          <div key={dl.id} className="card-item" style={{ borderLeft: `4px solid ${cor}` }}>
+                            <button onClick={() => { setSelectedDeadline(dl); setDeadlineEdits({}); }} style={{width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: 0}}>
+                              <div className="card-top">
+                                <strong>{dl.numeroPJE || dl.numeroSEI}</strong>
+                                <span className={`badge ${vencido ? 'status-indeferido' : urgente ? 'status-diligencia' : 'status-pendente'}`}>
+                                  {label}
+                                </span>
+                              </div>
+                              {dl.objeto && <p className="card-text"><strong>Objeto:</strong> {dl.objeto.substring(0, 120)}</p>}
+                              {dl.numeroSEI && dl.numeroPJE && <p className="card-text"><strong>SEI:</strong> {dl.numeroSEI}</p>}
+                              <p className="card-text"><strong>Prazo Fatal:</strong> {new Date(dl.prazoFatal).toLocaleDateString('pt-BR')}</p>
+                              <p className="card-text"><strong>Tipo:</strong> {dl.tipoPrazo === 'curto' ? 'Curto' : 'Longo'}</p>
+                            </button>
+                            <div style={{marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--neutral-300)'}}>
+                              <button className="btn-approve" style={{padding: '6px 14px', fontSize: '13px'}} onClick={(e) => { e.stopPropagation(); setConfirmConcludeDeadline(dl); }}>✅ Demanda Concluída</button>
                             </div>
-                            {dl.objeto && <p className="card-text"><strong>Objeto:</strong> {dl.objeto.substring(0, 120)}</p>}
-                            {dl.numeroSEI && dl.numeroPJE && <p className="card-text"><strong>SEI:</strong> {dl.numeroSEI}</p>}
-                            <p className="card-text"><strong>Prazo Fatal:</strong> {new Date(dl.prazoFatal).toLocaleDateString('pt-BR')}</p>
-                            <p className="card-text"><strong>Tipo:</strong> {dl.tipoPrazo === 'curto' ? 'Curto' : 'Longo'}</p>
                           </div>
                         );
                       })
                     )}
+                  </div>
+                )}
+
+                {confirmConcludeDeadline && (
+                  <div className="modal-overlay" onClick={() => setConfirmConcludeDeadline(null)}>
+                    <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+                      <h4>Confirmar Conclusão da Demanda</h4>
+                      <p style={{fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '12px'}}>
+                        Tem certeza que deseja marcar o prazo <strong>{confirmConcludeDeadline.numeroPJE || confirmConcludeDeadline.numeroSEI}</strong> como concluído?
+                        Ele será removido da lista de prazos ativos e movido para o histórico, registrando apenas o número do processo e a data de conclusão.
+                      </p>
+                      <div className="modal-actions">
+                        <button className="btn-primary" onClick={() => concludeDeadline(confirmConcludeDeadline)}>Sim, Concluir</button>
+                        <button className="btn-secondary" onClick={() => setConfirmConcludeDeadline(null)}>Cancelar</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {showDeadlineHistorico && (
+                  <div className="modal-overlay" onClick={() => setShowDeadlineHistorico(false)}>
+                    <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{maxWidth: '480px'}}>
+                      <h4>📜 Histórico de Prazos Concluídos</h4>
+                      <p>Demandas concluídas — mantido apenas o número do processo e a data de conclusão.</p>
+                      <div style={{maxHeight: '400px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px', margin: '1.2rem 0 1.7rem'}}>
+                        {deadlineHistorico.length === 0 ? (
+                          <p className="empty-state" style={{padding: '2rem 0'}}>Nenhuma demanda concluída ainda.</p>
+                        ) : (
+                          [...deadlineHistorico].sort((a, b) => new Date(b.dataConclusao) - new Date(a.dataConclusao)).map((h) => (
+                            <div key={h.id} style={{padding: '8px 0', borderBottom: '1px solid var(--border-color)'}}>
+                              <div className="info-line" style={{padding: 0, borderBottom: 'none'}}>
+                                <span>{h.dataConclusao ? new Date(h.dataConclusao).toLocaleDateString('pt-BR') : '—'}</span>
+                                <strong>{h.numeroProcesso || '—'}</strong>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                      <div className="modal-actions">
+                        <button className="btn-secondary" onClick={() => setShowDeadlineHistorico(false)}>Fechar</button>
+                      </div>
+                    </div>
                   </div>
                 )}
               </>

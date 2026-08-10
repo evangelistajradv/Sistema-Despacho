@@ -45,7 +45,7 @@ self.addEventListener('notificationclick', (event) => {
         }
       }
       // Abre nova janela se não houver nenhuma
-      const url = tab ? `/?tab=${tab}&notifId=${notifId || ''}` : '/';
+      const url = tab ? `/?tab=${tab}&notifId=${notifId || ''}&itemId=${itemId || ''}` : '/';
       if (clients.openWindow) return clients.openWindow(url);
     })
   );
