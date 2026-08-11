@@ -1374,6 +1374,37 @@ button, input, select, textarea {
   transform: translateY(0);
 }
 
+.btn-conclude {
+  padding: 10px 14px;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--neutral-300);
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-conclude:hover {
+  background: var(--neutral-200);
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+.btn-conclude:active {
+  opacity: 0.8;
+}
+
+@media (prefers-color-scheme: dark) {
+  .btn-conclude {
+    border-color: var(--neutral-600);
+  }
+  .btn-conclude:hover {
+    background: var(--neutral-700);
+  }
+}
+
 .btn-request {
   padding: 12px;
   background: linear-gradient(135deg, var(--primary-dark), var(--primary-main));

@@ -3444,8 +3444,8 @@ export default function SistemaDespacho() {
                         })}
                       </div>
                     </div>
-                    <div className="action-buttons">
-                      <button className="btn-approve" onClick={() => setConfirmConcludeDeadline(selectedDeadline)}>✅ Demanda Concluída</button>
+                    <div className="action-buttons" style={{justifyContent: 'flex-end', gap: '8px'}}>
+                      <button className="btn-conclude" onClick={() => setConfirmConcludeDeadline(selectedDeadline)}>Concluir demanda</button>
                       {can('deletar') && (<button className="btn-delete" onClick={() => deleteDeadline(selectedDeadline.id)}>🗑️ Deletar</button>)}
                     </div>
                   </div>
@@ -3476,8 +3476,8 @@ export default function SistemaDespacho() {
                               <p className="card-text"><strong>Prazo Fatal:</strong> {new Date(dl.prazoFatal).toLocaleDateString('pt-BR')}</p>
                               <p className="card-text"><strong>Tipo:</strong> {dl.tipoPrazo === 'curto' ? 'Curto' : 'Longo'}</p>
                             </button>
-                            <div style={{marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--neutral-300)'}}>
-                              <button className="btn-approve" style={{padding: '6px 14px', fontSize: '13px'}} onClick={(e) => { e.stopPropagation(); setConfirmConcludeDeadline(dl); }}>✅ Demanda Concluída</button>
+                            <div style={{marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--neutral-300)', textAlign: 'right'}}>
+                              <button className="btn-conclude" style={{padding: '6px 14px', fontSize: '13px'}} onClick={(e) => { e.stopPropagation(); setConfirmConcludeDeadline(dl); }}>Concluir demanda</button>
                             </div>
                           </div>
                         );
