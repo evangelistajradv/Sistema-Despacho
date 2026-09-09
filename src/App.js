@@ -107,6 +107,9 @@ export default function SistemaDespacho() {
   const [forgotMsg, setForgotMsg] = useState('');
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light');
   const [activeTab, setActiveTab] = useState('painel');
+  // Força o módulo Processo Adm. Ambiental a remontar do zero (dashboard)
+  // sempre que o usuário clica na aba dele na barra lateral.
+  const [ambientalResetKey, setAmbientalResetKey] = useState(0);
   const [processes, setProcesses] = useState([]);
   const [accompaniments, setAccompaniments] = useState([]);
   const [priorities, setPriorities] = useState([]);
@@ -242,6 +245,20 @@ export default function SistemaDespacho() {
   // pelo menos um dos dois setores (Gabinete e/ou ASSTEC).
   // "ambiental" é especial: só visível para quem tem núcleo 'asstec' — quem
   // só tem 'notificacoes' nem entra nessa tela (é redirecionado direto ao módulo).
+  // Clicar numa aba na barra lateral sempre retorna ao início daquela
+  // funcionalidade (lista/dashboard), mesmo se o usuário estava dentro de um
+  // detalhe ou de um formulário de criação — igual ao que já acontecia no Painel.
+  const goToTab = (tabId) => {
+    setSelectedProcess(null); setNewProcessMode(false);
+    setSelectedAccompaniment(null); setNewAccompanimentMode(false);
+    setSelectedHearing(null); setNewHearingMode(false); setHearingViewMode('list');
+    setSelectedDoe(null); setNewDoeMode(false);
+    setSelectedDeadline(null); setNewDeadlineMode(false); setShowDeadlineHistorico(false);
+    setSelectedPriority(null);
+    if (tabId === 'ambiental') setAmbientalResetKey((k) => k + 1);
+    setActiveTab(tabId);
+  };
+
   const tabVisible = (tabId) => {
     if (tabId === 'ambiental') return currentUser === 'master' || nucleoAmbiental[currentUser] === 'asstec';
     if (currentUser === 'master') return true;
@@ -2448,14 +2465,14 @@ export default function SistemaDespacho() {
     <div className="app-container">
       <aside className="sidebar">
         <div className="sidebar-header">
-          <button className="logo-btn" onClick={() => setActiveTab('painel')} title="Voltar ao início">
+          <button className="logo-btn" onClick={() => goToTab('painel')} title="Voltar ao início">
             <span className="logo-icon"><i className="ti ti-scale"></i></span>
             <div className="logo-text"><h2>ASSTEC</h2><p>Gestão Processual</p></div>
           </button>
         </div>
         <nav className="sidebar-nav">
           {TABS.filter(tab => tabVisible(tab.id)).map(tab => (
-            <button key={tab.id} className={`nav-item ${activeTab === tab.id ? 'active' : ''}`} onClick={() => setActiveTab(tab.id)}>
+            <button key={tab.id} className={`nav-item ${activeTab === tab.id ? 'active' : ''}`} onClick={() => goToTab(tab.id)}>
               <span className="icon"><i className={`ti ${tab.icon}`}></i></span><span className="label">{tab.label}</span>
             </button>
           ))}
@@ -3592,6 +3609,7 @@ export default function SistemaDespacho() {
 
             {activeTab === 'ambiental' && (
               <ProcessoAmbiental
+                key={ambientalResetKey}
                 currentUser={currentUser}
                 ALL_USERS={ALL_USERS}
                 nucleoAmbiental={nucleoAmbiental}
