@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase-config';
-import { collection, doc, addDoc, updateDoc, onSnapshot } from 'firebase/firestore';
+import { collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 
 // ═══════════════════════════════════════════════════════════════════
 // PROCESSO ADMINISTRATIVO AMBIENTAL — módulo separado e autônomo do
@@ -128,6 +128,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const [showResolverIncidente, setShowResolverIncidente] = useState(false);
   const [resolverForm, setResolverForm] = useState({ tipoResolucao: '', observacao: '' });
   const [confirmAction, setConfirmAction] = useState(null); // { mensagem, onConfirm }
+  const [estadoManualMaster, setEstadoManualMaster] = useState('');
 
   // Toda movimentação de processo passa por aqui: exibe um modal de
   // confirmação antes de executar a ação de fato.
@@ -196,6 +197,23 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const concluirProcesso = async (p) => {
     await updateDoc(doc(db, 'processosAmbientais', p.id), { concluido: true, concluidoEm: new Date().toISOString() });
     setView('dashboard'); setSelectedId(null);
+  };
+
+  // AR devolvido sem cumprimento (não entregue) — pula direto para o Edital,
+  // sem aguardar os 20 dias de contagem (não há AR válido para contar).
+  const arNaoCumprido = (p) => moverProcesso(p, 'pendente_edital', 'manual', { 'datas.arNaoCumpridoEm': new Date().toISOString().slice(0, 10) });
+
+  // Somente o master pode excluir um processo definitivamente.
+  const excluirProcesso = async (p) => {
+    await deleteDoc(doc(db, 'processosAmbientais', p.id));
+    setView('dashboard'); setSelectedId(null);
+  };
+
+  // Somente o master pode mover um processo para qualquer estado, livremente.
+  const moverEstadoMaster = (p) => {
+    if (!estadoManualMaster || estadoManualMaster === p.estado) return;
+    moverProcesso(p, estadoManualMaster, 'manual');
+    setEstadoManualMaster('');
   };
 
   const criarProcesso = async () => {
@@ -335,10 +353,16 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           <div className="form-group">
             <label>Data de Recebimento do AR</label>
             <input type="date" value={dataInput} onChange={(e) => setDataInput(e.target.value)} />
-            <button className="btn-primary" style={{ marginTop: '10px' }} disabled={!dataInput}
-              onClick={() => pedirConfirmacao(`Confirma o recebimento do AR em ${new Date(dataInput + 'T12:00:00').toLocaleDateString('pt-BR')}? A contagem do prazo de 20 dias será iniciada.`, () => { iniciarPrazo(p, 'recebimentoAR', dataInput, 'aguardando_prazo_ar'); setDataInput(''); })}>
-              Confirmar Recebimento do AR
-            </button>
+            <div className="action-buttons" style={{ marginTop: '10px' }}>
+              <button className="btn-primary" disabled={!dataInput}
+                onClick={() => pedirConfirmacao(`Confirma o recebimento do AR em ${new Date(dataInput + 'T12:00:00').toLocaleDateString('pt-BR')}? A contagem do prazo de 20 dias será iniciada.`, () => { iniciarPrazo(p, 'recebimentoAR', dataInput, 'aguardando_prazo_ar'); setDataInput(''); })}>
+                Confirmar Recebimento do AR
+              </button>
+              <button className="btn-secondary"
+                onClick={() => pedirConfirmacao('Confirma que o AR voltou não cumprido (não entregue)? O processo seguirá direto para Pendente de Edital.', () => arNaoCumprido(p))}>
+                AR Não Cumprido
+              </button>
+            </div>
           </div>
         );
 
@@ -580,6 +604,32 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             <div className="info-item"><label>Data de Autuação</label><p>{new Date(selected.dataAutuacao).toLocaleDateString('pt-BR')}</p></div>
             <div className="info-item"><label>Dias no Estado Atual</label><p>{diasNoEstado(selected.entradaNoEstadoEm)} dia(s)</p></div>
           </div>
+
+          {isMaster && (
+            <div className="info-box">
+              <label>⚙️ Controles do Administrador</label>
+              <div className="form-group">
+                <label>Alterar Estado do Processo (livre)</label>
+                <div className="action-buttons">
+                  <select value={estadoManualMaster} onChange={(e) => setEstadoManualMaster(e.target.value)}
+                    style={{ flex: 1, padding: '10px 12px', border: '1px solid var(--neutral-300)', borderRadius: '8px', background: 'var(--bg-card)', color: 'var(--text-primary)' }}>
+                    <option value="">Selecione um estado...</option>
+                    {Object.entries(ESTADOS_AMBIENTAL).sort((a, b) => a[1].ordem - b[1].ordem).map(([id, e]) => (
+                      <option key={id} value={id}>{e.label}</option>
+                    ))}
+                  </select>
+                  <button className="btn-secondary" disabled={!estadoManualMaster || estadoManualMaster === selected.estado}
+                    onClick={() => pedirConfirmacao(`Confirma a alteração manual do estado para "${ESTADOS_AMBIENTAL[estadoManualMaster]?.label}"?`, () => moverEstadoMaster(selected))}>
+                    Mover
+                  </button>
+                </div>
+              </div>
+              <button className="btn-delete" style={{ marginTop: '10px' }}
+                onClick={() => pedirConfirmacao(`Excluir definitivamente o processo ${selected.numeroSEI}? Esta ação não pode ser desfeita.`, () => excluirProcesso(selected))}>
+                🗑️ Excluir Processo
+              </button>
+            </div>
+          )}
 
           {selected.incidente?.ativo ? (
             <div className="info-box">
