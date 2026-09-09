@@ -12,6 +12,7 @@ import {
   GoogleAuthProvider, signInWithPopup, signInAnonymously,
 } from 'firebase/auth';
 import NotificationCenter from './NotificationCenter';
+import ProcessoAmbiental from './ProcessoAmbiental';
 import NotificationBanner from './NotificationBanner';
 import HearingCalendar from './HearingCalendar';
 import { addBanner } from './notification-service';
@@ -216,6 +217,7 @@ export default function SistemaDespacho() {
     { id: 'audiencias',      label: 'Audiências',                icon: 'ti-calendar-event' },
     { id: 'doe',             label: 'DOE/PI',                    icon: 'ti-news' },
     { id: 'prazos',          label: 'Prazos Judiciais',          icon: 'ti-scale' },
+    { id: 'ambiental',       label: 'Processo Adm. Ambiental',   icon: 'ti-leaf' },
   ];
   const DEFAULT_TAB_VISIBILITY = TABS.reduce((acc, t) => {
     acc[t.id] = { master: true, secretario: true, chefe_gab: true, servidora: true, estagiaria: true };
@@ -229,10 +231,19 @@ export default function SistemaDespacho() {
   DEFAULT_TAB_VISIBILITY.prioridade = { master: true, secretario: false, chefe_gab: false, servidora: true, estagiaria: true };
   const [tabVisibility, setTabVisibility] = useState(DEFAULT_TAB_VISIBILITY);
 
+  // Processo Administrativo Ambiental — módulo separado e autônomo. Cada
+  // usuário pertence a um núcleo ('asstec' | 'notificacoes') ou a nenhum.
+  // Quem só tem 'notificacoes' não enxerga NENHUMA aba do sistema de despacho.
+  const DEFAULT_NUCLEO_AMBIENTAL = { master: 'asstec', servidora: 'asstec', estagiaria: 'asstec' };
+  const [nucleoAmbiental, setNucleoAmbiental] = useState(DEFAULT_NUCLEO_AMBIENTAL);
+
   // master sempre vê tudo; demais respeitam a configuração (default = visível).
   // "acompanhamentos" é especial: fica visível se o usuário tiver acesso a
   // pelo menos um dos dois setores (Gabinete e/ou ASSTEC).
+  // "ambiental" é especial: só visível para quem tem núcleo 'asstec' — quem
+  // só tem 'notificacoes' nem entra nessa tela (é redirecionado direto ao módulo).
   const tabVisible = (tabId) => {
+    if (tabId === 'ambiental') return currentUser === 'master' || nucleoAmbiental[currentUser] === 'asstec';
     if (currentUser === 'master') return true;
     if (tabId === 'acompanhamentos') {
       return tabVisibility.acompanhamentos?.[currentUser] !== false || tabVisibility.acompanhamentos_asstec?.[currentUser] !== false;
@@ -725,6 +736,7 @@ export default function SistemaDespacho() {
             if (data.forceReRegister) setForceReRegister(data.forceReRegister);
             if (data.customUsers) setCustomUsers(data.customUsers);
             if (data.dashboardConfig) setDashboardConfig({ ...DEFAULT_DASHBOARD_CONFIG, ...data.dashboardConfig });
+            if (data.nucleoAmbiental) setNucleoAmbiental({ ...DEFAULT_NUCLEO_AMBIENTAL, ...data.nucleoAmbiental });
           } else {
             console.log('ℹ️ Config ainda não existe no Firebase - será criada ao salvar');
           }
@@ -875,7 +887,7 @@ export default function SistemaDespacho() {
     try {
       const payload = {
         doeEmails, accompEmails, userPasswords, pushNotifConfig, tabVisibility, userPermissions,
-        userEmails, emailRegistered, forceReRegister, customUsers, dashboardConfig,
+        userEmails, emailRegistered, forceReRegister, customUsers, dashboardConfig, nucleoAmbiental,
         ...overrides,
       };
       console.log('💾 Salvando config no Firebase:', payload);
@@ -1139,6 +1151,37 @@ export default function SistemaDespacho() {
     await saveConfig({ customUsers: newCustom, userPermissions: newPerms, tabVisibility: newTabVis });
     setNewExternalUserName(''); setNewExternalUserSetorOutro('');
     alert(`Usuário externo "${nome}" (${setorFinal}) criado! No primeiro login, essa pessoa vai cadastrar e-mail e senha (ou entrar com Google). Por padrão só enxerga a aba Prioridade de Tramitação.`);
+  };
+
+  // Usuário do Núcleo de Notificações do Processo Adm. Ambiental — sem
+  // qualquer acesso ao Sistema de Gestão Processual atual; ao logar, cai
+  // direto na dashboard exclusiva do módulo ambiental.
+  const createNucleoNotificacoesUser = async () => {
+    const nome = newUserName.trim();
+    if (!nome) { alert('Digite o nome do novo usuário'); return; }
+    const base = slugify(nome) || 'usuario';
+    let key = base, n = 2;
+    while (ALL_USERS[key]) { key = `${base}_${n}`; n++; }
+
+    const newCustom = { ...customUsers, [key]: { nome, role: key, criadoEm: new Date().toISOString() } };
+    const newPerms = { ...userPermissions, [key]: { ver: false, criar: false, editar: false, deletar: false, despachar: false } };
+    const newTabVis = Object.keys(tabVisibility).reduce((acc, tabId) => {
+      acc[tabId] = { ...tabVisibility[tabId], [key]: false };
+      return acc;
+    }, { ...tabVisibility });
+    const newNucleo = { ...nucleoAmbiental, [key]: 'notificacoes' };
+
+    setCustomUsers(newCustom); setUserPermissions(newPerms); setTabVisibility(newTabVis); setNucleoAmbiental(newNucleo);
+    await saveConfig({ customUsers: newCustom, userPermissions: newPerms, tabVisibility: newTabVis, nucleoAmbiental: newNucleo });
+    setNewUserName('');
+    alert(`Usuário "${nome}" criado no Núcleo de Notificações! No primeiro login, essa pessoa vai cadastrar e-mail e senha e cairá direto na dashboard do Processo Adm. Ambiental — sem acesso ao restante do sistema.`);
+  };
+
+  const setNucleoAmbientalRole = async (role, valor) => {
+    const newNucleo = { ...nucleoAmbiental, [role]: valor || null };
+    if (!valor) delete newNucleo[role];
+    setNucleoAmbiental(newNucleo);
+    await saveConfig({ nucleoAmbiental: newNucleo });
   };
 
   const renameUser = async (role) => {
@@ -2383,6 +2426,23 @@ export default function SistemaDespacho() {
     );
   }
 
+  // Usuário exclusivo do Núcleo de Notificações (Processo Adm. Ambiental) —
+  // não tem acesso a nenhuma aba do sistema de despacho; cai direto na
+  // dashboard exclusiva do módulo, com layout próprio (mesmo visual).
+  if (nucleoAmbiental[currentUser] === 'notificacoes') {
+    return (
+      <ProcessoAmbiental
+        currentUser={currentUser}
+        ALL_USERS={ALL_USERS}
+        nucleoAmbiental={nucleoAmbiental}
+        isMaster={false}
+        theme={theme}
+        setTheme={setTheme}
+        onLogout={handleLogout}
+        standalone
+      />
+    );
+  }
 
   return (
     <div className="app-container">
@@ -3530,6 +3590,19 @@ export default function SistemaDespacho() {
               </>
             )}
 
+            {activeTab === 'ambiental' && (
+              <ProcessoAmbiental
+                currentUser={currentUser}
+                ALL_USERS={ALL_USERS}
+                nucleoAmbiental={nucleoAmbiental}
+                isMaster={currentUser === 'master'}
+                theme={theme}
+                setTheme={setTheme}
+                onLogout={handleLogout}
+                standalone={false}
+              />
+            )}
+
             {activeTab === 'prioridade' && (
               <>
                 {selectedPriority ? (
@@ -3919,7 +3992,14 @@ export default function SistemaDespacho() {
                               onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); createUser(); } }} />
                           </div>
                           <button type="button" className="btn-primary" style={{flex:'0 0 auto', marginTop:0}} onClick={createUser}>Criar</button>
+                          <button type="button" className="btn-secondary" style={{flex:'0 0 auto', marginTop:0}} onClick={createNucleoNotificacoesUser}>
+                            🌿 Criar no Núcleo de Notificações (Ambiental)
+                          </button>
                         </div>
+                        <p style={{fontSize:'11px', color:'var(--text-secondary)', marginTop:'6px'}}>
+                          O botão verde cria um usuário sem nenhum acesso ao Sistema de Gestão Processual — ao logar,
+                          cai direto na dashboard do Processo Administrativo Ambiental (Núcleo de Notificações).
+                        </p>
                       </div>
 
                       {Object.entries(ALL_USERS).filter(([, info]) => !info.externo).map(([role, info]) => (
@@ -3931,6 +4011,15 @@ export default function SistemaDespacho() {
                             </span>
                           </div>
                           <div className="push-config-users">
+                            <label style={{display:'flex', alignItems:'center', gap:'6px', fontSize:'12px'}}>
+                              🌿 Núcleo Ambiental:
+                              <select value={nucleoAmbiental[role] || ''} onChange={(e) => setNucleoAmbientalRole(role, e.target.value)}
+                                style={{padding:'4px 8px', border:'1px solid var(--neutral-300)', borderRadius:'6px', background:'var(--bg-card)', color:'var(--text-primary)', fontSize:'12px'}}>
+                                <option value="">Nenhum</option>
+                                <option value="asstec">ASSTEC</option>
+                                <option value="notificacoes">Notificações</option>
+                              </select>
+                            </label>
                             <button type="button" className="link-btn" onClick={() => renameUser(role)}>
                               <i className="ti ti-edit"></i> Renomear
                             </button>

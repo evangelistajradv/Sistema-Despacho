@@ -3851,3 +3851,82 @@ button, input, select, textarea {
 .password-toggle:hover {
   color: var(--accent-gold-dark);
 }
+
+/* ═══════════════════════════════════════════════════════════════ */
+/* PROCESSO ADMINISTRATIVO AMBIENTAL — dashboard de estados         */
+/* ═══════════════════════════════════════════════════════════════ */
+
+.pa-dash-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 14px;
+}
+
+.pa-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 18px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: var(--transition);
+}
+
+.pa-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(0,0,0,0.08);
+  border-color: var(--primary-main);
+}
+
+.pa-card-count {
+  font-size: 32px;
+  font-weight: 800;
+  color: var(--primary-main);
+}
+
+.pa-card-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  line-height: 1.35;
+}
+
+.pa-card-incident {
+  border-color: var(--accent-red, #c0392b);
+  background: rgba(192, 57, 43, 0.06);
+}
+
+.pa-card-incident .pa-card-count {
+  color: var(--accent-red, #c0392b);
+}
+
+@keyframes pa-blink {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(212, 160, 23, 0.55); }
+  50% { box-shadow: 0 0 0 6px rgba(212, 160, 23, 0); }
+}
+
+.pa-card-blink {
+  border-color: var(--accent-gold, #d4a017);
+  animation: pa-blink 1.4s infinite;
+}
+
+.alert-banner {
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.alert-banner.warning {
+  background: rgba(212, 160, 23, 0.14);
+  color: #8a6200;
+  border: 1px solid rgba(212, 160, 23, 0.4);
+}
+
+@media (prefers-color-scheme: dark) {
+  .alert-banner.warning {
+    color: #e8c766;
+  }
+}
