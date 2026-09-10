@@ -109,7 +109,7 @@ const onlyDigits = (s) => (s || '').replace(/\D/g, '');
 
 const fmtMoeda = (v) => (Number(v) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
-export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbiental, isMaster, theme, setTheme, onLogout, standalone }) {
+export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbiental, isMaster, podeAdministrar, theme, setTheme, onLogout, standalone }) {
   const meuNucleo = isMaster ? 'master' : (nucleoAmbiental?.[currentUser] || null);
 
   const [processos, setProcessos] = useState([]);
@@ -129,6 +129,8 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const [resolverForm, setResolverForm] = useState({ tipoResolucao: '', observacao: '' });
   const [confirmAction, setConfirmAction] = useState(null); // { mensagem, onConfirm }
   const [estadoManualMaster, setEstadoManualMaster] = useState('');
+  const [selecionados, setSelecionados] = useState(new Set());
+  const [estadoLote, setEstadoLote] = useState('');
 
   // Toda movimentação de processo passa por aqui: exibe um modal de
   // confirmação antes de executar a ação de fato.
@@ -214,6 +216,21 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     if (!estadoManualMaster || estadoManualMaster === p.estado) return;
     moverProcesso(p, estadoManualMaster, 'manual');
     setEstadoManualMaster('');
+  };
+
+  const toggleSelecionado = (id) => {
+    setSelecionados((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const moverLote = (lista) => {
+    if (!estadoLote || selecionados.size === 0) return;
+    lista.filter((p) => selecionados.has(p.id)).forEach((p) => moverProcesso(p, estadoLote, 'manual'));
+    setSelecionados(new Set());
+    setEstadoLote('');
   };
 
   const criarProcesso = async () => {
@@ -493,7 +510,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                 </button>
               )}
               <button className="btn-settings" onClick={() => { setEstadoFiltro(null); setView('lista'); }}>Todos os Processos</button>
-              {!somenteConsulta && meuNucleo !== 'notificacoes' && (
+              {!somenteConsulta && (
                 <button className="btn-new" onClick={() => setView('novo')}>+ Novo Processo</button>
               )}
             </div>
@@ -573,21 +590,60 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             </label>
           )}
 
-          {(estadoFiltro === '__incidente__' ? filtrarBusca(incidentesAtivos) : listaAtual()).length === 0 ? (
-            <p className="empty-state">Nenhum processo encontrado</p>
-          ) : (
-            (estadoFiltro === '__incidente__' ? filtrarBusca(incidentesAtivos) : listaAtual()).map((p) => (
-              <div key={p.id} onClick={() => { setSelectedId(p.id); setView('detalhe'); }} className="card-item">
-                <div className="card-top">
-                  <strong>{p.numeroSEI}</strong>
-                  <span className="badge status-pendente">{p.incidente?.ativo ? '🚧 Incidente' : ESTADOS_AMBIENTAL[p.estado]?.label}</span>
-                </div>
-                <p className="card-text"><strong>Parte:</strong> {p.parte}</p>
-                <p className="card-text"><strong>Autuado em:</strong> {new Date(p.dataAutuacao).toLocaleDateString('pt-BR')}</p>
-                <p className="card-text"><strong>Dias no estado atual:</strong> {diasNoEstado(p.entradaNoEstadoEm)} dia(s)</p>
-              </div>
-            ))
-          )}
+          {(() => {
+            const listaExibida = estadoFiltro === '__incidente__' ? filtrarBusca(incidentesAtivos) : listaAtual();
+            const podeLote = (isMaster || podeAdministrar) && !estadoFiltro;
+
+            if (listaExibida.length === 0) return <p className="empty-state">Nenhum processo encontrado</p>;
+
+            return (
+              <>
+                {podeLote && (
+                  <div className="form-grid" style={{ marginBottom: '14px', alignItems: 'flex-end' }}>
+                    <div className="form-group">
+                      <label>Mover em Lote ({selecionados.size} selecionado{selecionados.size === 1 ? '' : 's'})</label>
+                      <select value={estadoLote} onChange={(e) => setEstadoLote(e.target.value)}
+                        style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--neutral-300)', borderRadius: '8px', background: 'var(--bg-card)', color: 'var(--text-primary)' }}>
+                        <option value="">Selecione o estado destino...</option>
+                        {Object.entries(ESTADOS_AMBIENTAL).sort((a, b) => a[1].ordem - b[1].ordem).map(([id, e]) => (
+                          <option key={id} value={id}>{e.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="form-group" style={{ flex: '0 0 auto' }}>
+                      <button className="btn-primary" disabled={!estadoLote || selecionados.size === 0}
+                        onClick={() => pedirConfirmacao(`Mover ${selecionados.size} processo(s) selecionado(s) para "${ESTADOS_AMBIENTAL[estadoLote]?.label}"?`, () => moverLote(listaExibida))}>
+                        Mover Selecionados
+                      </button>
+                    </div>
+                    {selecionados.size > 0 && (
+                      <div className="form-group" style={{ flex: '0 0 auto' }}>
+                        <button type="button" className="link-btn" onClick={() => setSelecionados(new Set())}>Limpar seleção</button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {listaExibida.map((p) => (
+                  <div key={p.id} className="card-item" style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+                    {podeLote && (
+                      <input type="checkbox" checked={selecionados.has(p.id)} onChange={() => toggleSelecionado(p.id)}
+                        onClick={(e) => e.stopPropagation()} style={{ marginTop: '4px' }} />
+                    )}
+                    <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => { setSelectedId(p.id); setView('detalhe'); }}>
+                      <div className="card-top">
+                        <strong>{p.numeroSEI}</strong>
+                        <span className="badge status-pendente">{p.incidente?.ativo ? '🚧 Incidente' : ESTADOS_AMBIENTAL[p.estado]?.label}</span>
+                      </div>
+                      <p className="card-text"><strong>Parte:</strong> {p.parte}</p>
+                      <p className="card-text"><strong>Autuado em:</strong> {new Date(p.dataAutuacao).toLocaleDateString('pt-BR')}</p>
+                      <p className="card-text"><strong>Dias no estado atual:</strong> {diasNoEstado(p.entradaNoEstadoEm)} dia(s)</p>
+                    </div>
+                  </div>
+                ))}
+              </>
+            );
+          })()}
         </div>
       )}
 
@@ -605,9 +661,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             <div className="info-item"><label>Dias no Estado Atual</label><p>{diasNoEstado(selected.entradaNoEstadoEm)} dia(s)</p></div>
           </div>
 
-          {isMaster && (
+          {(isMaster || podeAdministrar) && (
             <div className="info-box">
-              <label>⚙️ Controles do Administrador</label>
+              <label>⚙️ Controles Administrativos</label>
               <div className="form-group">
                 <label>Alterar Estado do Processo (livre)</label>
                 <div className="action-buttons">

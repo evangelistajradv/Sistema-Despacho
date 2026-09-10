@@ -239,6 +239,10 @@ export default function SistemaDespacho() {
   // Quem só tem 'notificacoes' não enxerga NENHUMA aba do sistema de despacho.
   const DEFAULT_NUCLEO_AMBIENTAL = { master: 'asstec', servidora: 'asstec', estagiaria: 'asstec' };
   const [nucleoAmbiental, setNucleoAmbiental] = useState(DEFAULT_NUCLEO_AMBIENTAL);
+  // Permissão avançada do Processo Adm. Ambiental (equivalente ao master):
+  // excluir processos, mover individualmente para qualquer estado e mover em
+  // lote. Por padrão só o master tem — o master pode liberar para mais gente.
+  const [ambientalAdminExtra, setAmbientalAdminExtra] = useState({});
 
   // master sempre vê tudo; demais respeitam a configuração (default = visível).
   // "acompanhamentos" é especial: fica visível se o usuário tiver acesso a
@@ -754,6 +758,7 @@ export default function SistemaDespacho() {
             if (data.customUsers) setCustomUsers(data.customUsers);
             if (data.dashboardConfig) setDashboardConfig({ ...DEFAULT_DASHBOARD_CONFIG, ...data.dashboardConfig });
             if (data.nucleoAmbiental) setNucleoAmbiental({ ...DEFAULT_NUCLEO_AMBIENTAL, ...data.nucleoAmbiental });
+            if (data.ambientalAdminExtra) setAmbientalAdminExtra(data.ambientalAdminExtra);
           } else {
             console.log('ℹ️ Config ainda não existe no Firebase - será criada ao salvar');
           }
@@ -904,7 +909,7 @@ export default function SistemaDespacho() {
     try {
       const payload = {
         doeEmails, accompEmails, userPasswords, pushNotifConfig, tabVisibility, userPermissions,
-        userEmails, emailRegistered, forceReRegister, customUsers, dashboardConfig, nucleoAmbiental,
+        userEmails, emailRegistered, forceReRegister, customUsers, dashboardConfig, nucleoAmbiental, ambientalAdminExtra,
         ...overrides,
       };
       console.log('💾 Salvando config no Firebase:', payload);
@@ -1135,10 +1140,14 @@ export default function SistemaDespacho() {
     const newCustom = { ...customUsers, [key]: { nome, role: key, criadoEm: new Date().toISOString() } };
     // Permissões básicas de início (leitura liberada; o resto o master ajusta no painel de Permissões)
     const newPerms = { ...userPermissions, [key]: { ver: true, criar: false, editar: false, deletar: false, despachar: false } };
-    setCustomUsers(newCustom); setUserPermissions(newPerms);
-    await saveConfig({ customUsers: newCustom, userPermissions: newPerms });
+    // Senha de primeiro acesso padrão "123456" — a pessoa usa essa senha como
+    // "senha atual" ao cadastrar seu e-mail/senha definitivos, sem o master
+    // precisar forçar um recadastro manualmente toda vez.
+    const newPasswords = { ...userPasswords, [key]: '123456' };
+    setCustomUsers(newCustom); setUserPermissions(newPerms); setUserPasswords(newPasswords);
+    await saveConfig({ customUsers: newCustom, userPermissions: newPerms, userPasswords: newPasswords });
     setNewUserName('');
-    alert(`Usuário "${nome}" criado! No primeiro login, essa pessoa vai cadastrar e-mail e senha (ou entrar com Google).`);
+    alert(`Usuário "${nome}" criado! Senha de primeiro acesso: 123456. No primeiro login, essa pessoa usa essa senha para cadastrar seu e-mail e senha definitivos (ou entrar direto com Google).`);
   };
 
   // Usuário externo: servidor/interessado de outro setor da SEMARH, para uso
@@ -1164,10 +1173,11 @@ export default function SistemaDespacho() {
       return acc;
     }, { ...tabVisibility });
 
-    setCustomUsers(newCustom); setUserPermissions(newPerms); setTabVisibility(newTabVis);
-    await saveConfig({ customUsers: newCustom, userPermissions: newPerms, tabVisibility: newTabVis });
+    const newPasswords = { ...userPasswords, [key]: '123456' };
+    setCustomUsers(newCustom); setUserPermissions(newPerms); setTabVisibility(newTabVis); setUserPasswords(newPasswords);
+    await saveConfig({ customUsers: newCustom, userPermissions: newPerms, tabVisibility: newTabVis, userPasswords: newPasswords });
     setNewExternalUserName(''); setNewExternalUserSetorOutro('');
-    alert(`Usuário externo "${nome}" (${setorFinal}) criado! No primeiro login, essa pessoa vai cadastrar e-mail e senha (ou entrar com Google). Por padrão só enxerga a aba Prioridade de Tramitação.`);
+    alert(`Usuário externo "${nome}" (${setorFinal}) criado! Senha de primeiro acesso: 123456. No primeiro login, essa pessoa usa essa senha para cadastrar e-mail e senha definitivos (ou entrar com Google). Por padrão só enxerga a aba Prioridade de Tramitação.`);
   };
 
   // Usuário do Núcleo de Notificações do Processo Adm. Ambiental — sem
@@ -1187,11 +1197,12 @@ export default function SistemaDespacho() {
       return acc;
     }, { ...tabVisibility });
     const newNucleo = { ...nucleoAmbiental, [key]: 'notificacoes' };
+    const newPasswords = { ...userPasswords, [key]: '123456' };
 
-    setCustomUsers(newCustom); setUserPermissions(newPerms); setTabVisibility(newTabVis); setNucleoAmbiental(newNucleo);
-    await saveConfig({ customUsers: newCustom, userPermissions: newPerms, tabVisibility: newTabVis, nucleoAmbiental: newNucleo });
+    setCustomUsers(newCustom); setUserPermissions(newPerms); setTabVisibility(newTabVis); setNucleoAmbiental(newNucleo); setUserPasswords(newPasswords);
+    await saveConfig({ customUsers: newCustom, userPermissions: newPerms, tabVisibility: newTabVis, nucleoAmbiental: newNucleo, userPasswords: newPasswords });
     setNewUserName('');
-    alert(`Usuário "${nome}" criado no Núcleo de Notificações! No primeiro login, essa pessoa vai cadastrar e-mail e senha e cairá direto na dashboard do Processo Adm. Ambiental — sem acesso ao restante do sistema.`);
+    alert(`Usuário "${nome}" criado no Núcleo de Notificações! Senha de primeiro acesso: 123456. No primeiro login, essa pessoa usa essa senha para cadastrar e-mail e senha definitivos, e cairá direto na dashboard do Processo Adm. Ambiental — sem acesso ao restante do sistema.`);
   };
 
   const setNucleoAmbientalRole = async (role, valor) => {
@@ -1199,6 +1210,12 @@ export default function SistemaDespacho() {
     if (!valor) delete newNucleo[role];
     setNucleoAmbiental(newNucleo);
     await saveConfig({ nucleoAmbiental: newNucleo });
+  };
+
+  const toggleAmbientalAdminExtra = async (role, valor) => {
+    const newExtra = { ...ambientalAdminExtra, [role]: valor };
+    setAmbientalAdminExtra(newExtra);
+    await saveConfig({ ambientalAdminExtra: newExtra });
   };
 
   const renameUser = async (role) => {
@@ -2453,6 +2470,7 @@ export default function SistemaDespacho() {
         ALL_USERS={ALL_USERS}
         nucleoAmbiental={nucleoAmbiental}
         isMaster={false}
+        podeAdministrar={!!ambientalAdminExtra[currentUser]}
         theme={theme}
         setTheme={setTheme}
         onLogout={handleLogout}
@@ -3614,6 +3632,7 @@ export default function SistemaDespacho() {
                 ALL_USERS={ALL_USERS}
                 nucleoAmbiental={nucleoAmbiental}
                 isMaster={currentUser === 'master'}
+                podeAdministrar={currentUser === 'master' || !!ambientalAdminExtra[currentUser]}
                 theme={theme}
                 setTheme={setTheme}
                 onLogout={handleLogout}
@@ -4038,6 +4057,12 @@ export default function SistemaDespacho() {
                                 <option value="notificacoes">Notificações</option>
                               </select>
                             </label>
+                            {role !== 'master' && (
+                              <label style={{display:'flex', alignItems:'center', gap:'6px', fontSize:'12px'}} title="Excluir processos, mover individualmente para qualquer estado e mover em lote — igual ao master">
+                                <input type="checkbox" checked={!!ambientalAdminExtra[role]} onChange={(e) => toggleAmbientalAdminExtra(role, e.target.checked)} />
+                                🌿 Admin. Ambiental Total
+                              </label>
+                            )}
                             <button type="button" className="link-btn" onClick={() => renameUser(role)}>
                               <i className="ti ti-edit"></i> Renomear
                             </button>
