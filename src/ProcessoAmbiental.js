@@ -248,6 +248,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       criadoEm: new Date().toISOString(), criadoPor: currentUser,
     });
     setNovo({ numeroSEI: '', parte: '', valorMulta: '' });
+    alert(`✅ Processo ${novo.numeroSEI.trim()} autuado com sucesso!\n\nRemetido à ASSTEC para triagem inicial.`);
     setView('dashboard');
   };
 
