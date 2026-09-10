@@ -642,22 +642,25 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                   const arAtrasado = p.estado === 'pendente_retorno_ar' && diasNoEstado(p.entradaNoEstadoEm) > 60;
                   const éNovo = estadoFiltro && estadoFiltro !== '__incidente__' && vezesVisto(p) < 3;
                   return (
-                  <div key={p.id} className={`card-item ${arAtrasado ? 'card-item-alerta' : (éNovo ? 'card-item-blink' : '')}`} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
-                    {podeLote && (
-                      <input type="checkbox" checked={selecionados.has(p.id)} onChange={() => toggleSelecionado(p.id)}
-                        onClick={(e) => e.stopPropagation()} style={{ marginTop: '4px' }} />
-                    )}
-                    <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => { setSelectedId(p.id); setView('detalhe'); }}>
-                      <div className="card-top">
-                        <strong>{p.numeroSEI}</strong>
-                        <span className="badge status-pendente">{p.incidente?.ativo ? '🚧 Incidente' : ESTADOS_AMBIENTAL[p.estado]?.label}</span>
+                  <div key={p.id} className={`card-item ${arAtrasado ? 'card-item-alerta' : (éNovo ? 'card-item-blink' : '')}`} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', flexDirection: 'column' }}>
+                    <div style={{ display: 'flex', gap: '10px', width: '100%' }}>
+                      {podeLote && (
+                        <input type="checkbox" checked={selecionados.has(p.id)} onChange={() => toggleSelecionado(p.id)}
+                          onClick={(e) => e.stopPropagation()} style={{ marginTop: '4px' }} />
+                      )}
+                      <div style={{ flex: 1, userSelect: 'text' }}>
+                        <div className="card-top">
+                          <strong>{p.numeroSEI}</strong>
+                          <span className="badge status-pendente">{p.incidente?.ativo ? '🚧 Incidente' : ESTADOS_AMBIENTAL[p.estado]?.label}</span>
+                        </div>
+                        {éNovo && <span className="card-item-new-badge">🆕 Novo processo</span>}
+                        <p className="card-text"><strong>Parte:</strong> {p.parte}</p>
+                        <p className="card-text"><strong>Autuado em:</strong> {new Date(p.dataAutuacao).toLocaleDateString('pt-BR')}</p>
+                        <p className="card-text"><strong>Dias no estado atual:</strong> {diasNoEstado(p.entradaNoEstadoEm)} dia(s)</p>
+                        {arAtrasado && <p className="card-text" style={{ color: 'var(--accent-red, #B14C40)', fontWeight: 700 }}>⚠️ Mais de 60 dias sem retorno do AR</p>}
                       </div>
-                      {éNovo && <span className="card-item-new-badge">🆕 Novo processo</span>}
-                      <p className="card-text"><strong>Parte:</strong> {p.parte}</p>
-                      <p className="card-text"><strong>Autuado em:</strong> {new Date(p.dataAutuacao).toLocaleDateString('pt-BR')}</p>
-                      <p className="card-text"><strong>Dias no estado atual:</strong> {diasNoEstado(p.entradaNoEstadoEm)} dia(s)</p>
-                      {arAtrasado && <p className="card-text" style={{ color: 'var(--accent-red, #B14C40)', fontWeight: 700 }}>⚠️ Mais de 60 dias sem retorno do AR</p>}
                     </div>
+                    <button className="btn-secondary" style={{ alignSelf: 'flex-start', marginTop: '4px' }} onClick={() => { setSelectedId(p.id); setView('detalhe'); }}>Ver Detalhes →</button>
                   </div>
                   );
                 })}
