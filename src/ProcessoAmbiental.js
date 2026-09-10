@@ -152,7 +152,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     await updateDoc(doc(db, 'processosAmbientais', p.id), {
       estado: novoEstado,
       entradaNoEstadoEm: new Date().toISOString(),
-      vistoPorNucleo: { asstec: false, notificacoes: false },
+      vistoPor: {},
       historico,
       ...extra,
     });
@@ -243,7 +243,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       estado: 'triagem',
       dataAutuacao: new Date().toISOString().slice(0, 10),
       entradaNoEstadoEm: new Date().toISOString(),
-      vistoPorNucleo: { asstec: false, notificacoes: false },
+      vistoPor: {},
       datas: {}, historico: [], incidente: null, concluido: false,
       criadoEm: new Date().toISOString(), criadoPor: currentUser,
     });
@@ -292,7 +292,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     await updateDoc(doc(db, 'processosAmbientais', p.id), {
       estado: novoEstado,
       entradaNoEstadoEm: new Date().toISOString(),
-      vistoPorNucleo: { asstec: false, notificacoes: false },
+      vistoPor: {},
       ...extra,
       incidente: { ...inc, ativo: false, resolvidoEm: new Date().toISOString(), resolvidoPor: currentUser, tipoResolucao: resolverForm.tipoResolucao, observacaoResolucao: resolverForm.observacao },
       historico: [...(p.historico || []), { de: 'incidente', para: novoEstado, em: new Date().toISOString(), por: currentUser, tipo: 'manual' }],
@@ -325,17 +325,24 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
 
   const contarEstado = (id) => ativos.filter((p) => p.estado === id);
   const nucleoDoEstado = (id) => (ESTADOS_AMBIENTAL[id].nucleo === 'ambos' ? meuNucleo : ESTADOS_AMBIENTAL[id].nucleo);
-  const piscando = (id) => contarEstado(id).some((p) => !p.vistoPorNucleo?.[nucleoDoEstado(id)]);
+  // Cada pessoa tem seu próprio contador de acessos (vistoPor.<usuário>).
+  // O card do ESTADO (dashboard) só pisca até o 1º acesso (contador === 0).
+  // O card do PROCESSO (dentro da lista) pisca até a 3ª vez que a pessoa
+  // entrar naquele estado (contador < 3). Movimentar o processo (ver
+  // moverProcesso) reinicia o contador para todos.
+  const vezesVisto = (p) => p.vistoPor?.[currentUser] || 0;
+  const naoVistos = (id) => contarEstado(id).filter((p) => vezesVisto(p) === 0);
+  // Aguardando Retorno de AR: alerta vermelho quando algum processo já
+  // passou de 60 dias sem registro de retorno.
+  const temARAtrasado = (id) => id === 'pendente_retorno_ar' && contarEstado(id).some((p) => diasNoEstado(p.entradaNoEstadoEm) > 60);
 
   const abrirGrupo = async (estadoId) => {
     setEstadoFiltro(estadoId);
     setView('lista');
-    if (somenteConsulta || isMaster) return;
-    const chave = nucleoDoEstado(estadoId);
-    if (chave !== meuNucleo) return;
-    const pendentes = contarEstado(estadoId).filter((p) => !p.vistoPorNucleo?.[chave]);
+    if (somenteConsulta) return;
+    const pendentes = contarEstado(estadoId).filter((p) => vezesVisto(p) < 3);
     for (const p of pendentes) {
-      await updateDoc(doc(db, 'processosAmbientais', p.id), { [`vistoPorNucleo.${chave}`]: true });
+      await updateDoc(doc(db, 'processosAmbientais', p.id), { [`vistoPor.${currentUser}`]: vezesVisto(p) + 1 });
     }
   };
 
@@ -527,12 +534,18 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           )}
 
           <div className="pa-dash-grid">
-            {estadosVisiveis.map(([id, est]) => (
-              <div key={id} className={`pa-card ${piscando(id) ? 'pa-card-blink' : ''}`} onClick={() => abrirGrupo(id)}>
+            {estadosVisiveis.map(([id, est]) => {
+              const novos = naoVistos(id).length;
+              const arAtrasado = temARAtrasado(id);
+              const classeBlink = arAtrasado ? 'pa-card-blink-red' : (novos > 0 ? 'pa-card-blink' : '');
+              return (
+              <div key={id} className={`pa-card ${classeBlink}`} onClick={() => abrirGrupo(id)}>
                 <span className="pa-card-count">{contarEstado(id).length}</span>
                 <span className="pa-card-label">{est.label}</span>
+                {novos > 0 && <span className="pa-card-new-badge">{novos} novo{novos === 1 ? '' : 's'} processo{novos === 1 ? '' : 's'}</span>}
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -625,8 +638,11 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                   </div>
                 )}
 
-                {listaExibida.map((p) => (
-                  <div key={p.id} className="card-item" style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+                {listaExibida.map((p) => {
+                  const arAtrasado = p.estado === 'pendente_retorno_ar' && diasNoEstado(p.entradaNoEstadoEm) > 60;
+                  const éNovo = estadoFiltro && estadoFiltro !== '__incidente__' && vezesVisto(p) < 3;
+                  return (
+                  <div key={p.id} className={`card-item ${arAtrasado ? 'card-item-alerta' : (éNovo ? 'card-item-blink' : '')}`} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
                     {podeLote && (
                       <input type="checkbox" checked={selecionados.has(p.id)} onChange={() => toggleSelecionado(p.id)}
                         onClick={(e) => e.stopPropagation()} style={{ marginTop: '4px' }} />
@@ -636,12 +652,15 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                         <strong>{p.numeroSEI}</strong>
                         <span className="badge status-pendente">{p.incidente?.ativo ? '🚧 Incidente' : ESTADOS_AMBIENTAL[p.estado]?.label}</span>
                       </div>
+                      {éNovo && <span className="card-item-new-badge">🆕 Novo processo</span>}
                       <p className="card-text"><strong>Parte:</strong> {p.parte}</p>
                       <p className="card-text"><strong>Autuado em:</strong> {new Date(p.dataAutuacao).toLocaleDateString('pt-BR')}</p>
                       <p className="card-text"><strong>Dias no estado atual:</strong> {diasNoEstado(p.entradaNoEstadoEm)} dia(s)</p>
+                      {arAtrasado && <p className="card-text" style={{ color: 'var(--accent-red, #B14C40)', fontWeight: 700 }}>⚠️ Mais de 60 dias sem retorno do AR</p>}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </>
             );
           })()}
