@@ -318,6 +318,25 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     await updateDoc(doc(db, 'processosAmbientais', p.id), { observacao: observacaoInput });
   };
 
+  // ─── Marcadores do processo (urgente, órgão público, atenção) ────
+  // Disponíveis em qualquer estado, direto no processo. "Urgente" guarda
+  // a data em que foi marcado, para ordenar os urgentes entre si (o mais
+  // antigo marcado aparece primeiro).
+  const marcarUrgente = async (p, valor) => {
+    await updateDoc(doc(db, 'processosAmbientais', p.id), {
+      urgente: valor,
+      urgenteDesde: valor ? new Date().toISOString() : null,
+    });
+  };
+
+  const marcarOrgaoPublico = async (p, valor) => {
+    await updateDoc(doc(db, 'processosAmbientais', p.id), { orgaoPublico: valor });
+  };
+
+  const marcarAtencao = async (p, valor) => {
+    await updateDoc(doc(db, 'processosAmbientais', p.id), { atencao: valor });
+  };
+
   // Master pode corrigir os dados cadastrais do processo (não é movimentação
   // de estado, então não passa pelo histórico de tramitação).
   const salvarEdicaoInfo = async (p) => {
@@ -536,6 +555,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   // Aguardando Retorno de AR: alerta vermelho quando algum processo já
   // passou de 60 dias sem registro de retorno.
   const temARAtrasado = (id) => id === 'pendente_retorno_ar' && contarEstado(id).some((p) => diasNoEstado(p.entradaNoEstadoEm) > 60);
+  // Contagem de urgentes por estado — ao contrário do aviso de "novo
+  // processo", essa informação nunca some, independente de já ter sido visto.
+  const contarUrgentes = (id) => contarEstado(id).filter((p) => p.urgente).length;
 
   const abrirGrupo = async (estadoId) => {
     setEstadoFiltro(estadoId);
@@ -552,9 +574,16 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     if (estadoFiltro) lista = lista.filter((p) => p.estado === estadoFiltro);
     if (nucleoFiltro !== 'todos') lista = lista.filter((p) => ESTADOS_AMBIENTAL[p.estado]?.nucleo === nucleoFiltro || ESTADOS_AMBIENTAL[p.estado]?.nucleo === 'ambos');
     lista = filtrarBusca(lista);
-    lista = [...lista].sort((a, b) => ordem === 'antigo'
-      ? new Date(a.dataAutuacao) - new Date(b.dataAutuacao)
-      : new Date(b.dataAutuacao) - new Date(a.dataAutuacao));
+    // Processos urgentes sempre no topo, em ordem cronológica entre si (o
+    // primeiro marcado como urgente aparece primeiro); os demais mantêm a
+    // ordenação escolhida pelo usuário.
+    lista = [...lista].sort((a, b) => {
+      if (!!a.urgente !== !!b.urgente) return a.urgente ? -1 : 1;
+      if (a.urgente && b.urgente) return new Date(a.urgenteDesde || 0) - new Date(b.urgenteDesde || 0);
+      return ordem === 'antigo'
+        ? new Date(a.dataAutuacao) - new Date(b.dataAutuacao)
+        : new Date(b.dataAutuacao) - new Date(a.dataAutuacao);
+    });
     return lista;
   };
 
@@ -871,6 +900,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             {estadosVisiveis.map(([id, est], idx) => {
               const novos = publico ? 0 : naoVistos(id).length;
               const arAtrasado = publico ? false : temARAtrasado(id);
+              const urgentes = contarUrgentes(id);
               const classeBlink = arAtrasado ? 'pa-card-blink-red' : (novos > 0 ? 'pa-card-blink' : '');
               const setorLabel = est.nucleo === 'asstec' ? 'ASSTEC' : est.nucleo === 'notificacoes' ? 'Núcleo de Notificação' : null;
               return (
@@ -882,6 +912,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                     {setorLabel && <span className="pa-card-sector-badge">{setorLabel}</span>}
                     <span className="pa-card-count">{contarEstado(id).length}</span>
                     <span className="pa-card-label">{est.label}</span>
+                    {urgentes > 0 && <span className="pa-card-urgent-badge">🔴 Processos urgentes: {urgentes}</span>}
                     {novos > 0 && <span className="pa-card-new-badge">{novos} novo{novos === 1 ? '' : 's'} processo{novos === 1 ? '' : 's'}</span>}
                   </div>
                   {idx < estadosVisiveis.length - 1 && (
@@ -1029,8 +1060,18 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                 {listaExibida.map((p) => {
                   const arAtrasado = p.estado === 'pendente_retorno_ar' && diasNoEstado(p.entradaNoEstadoEm) > 60;
                   const éNovo = estadoFiltro && estadoFiltro !== '__incidente__' && vezesVisto(p) < 3;
+                  // Prioridade visual: AR atrasado (vermelho) > urgente/atenção
+                  // (amarelo) > órgão público (verde) > novo processo (pisca).
+                  const marcadorClasse = arAtrasado
+                    ? 'card-item-alerta'
+                    : (p.urgente || p.atencao)
+                      ? 'card-item-marcado-amarelo'
+                      : p.orgaoPublico
+                        ? 'card-item-marcado-verde'
+                        : (éNovo ? 'card-item-blink' : '');
                   return (
-                  <div key={p.id} className={`card-item ${arAtrasado ? 'card-item-alerta' : (éNovo ? 'card-item-blink' : '')}`} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', flexDirection: 'column' }}>
+                  <div key={p.id} className={`card-item ${marcadorClasse}`} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', flexDirection: 'column' }}>
+                    {p.orgaoPublico && <span className="card-item-corner-badge">🏛️ Órgão/Ente Público</span>}
                     <div style={{ display: 'flex', gap: '10px', width: '100%' }}>
                       {podeLote && (
                         <input type="checkbox" checked={selecionados.has(p.id)} onChange={() => toggleSelecionado(p.id)}
@@ -1041,6 +1082,12 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                           <strong>{p.numeroSEI}</strong>
                           <span className="badge status-pendente">{p.incidente?.ativo ? '🚧 Incidente' : ESTADOS_AMBIENTAL[p.estado]?.label}</span>
                         </div>
+                        {(p.urgente || p.atencao) && (
+                          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', margin: '2px 0 6px' }}>
+                            {p.urgente && <span className="card-item-tag card-item-tag-urgente">🔴 Urgente</span>}
+                            {p.atencao && <span className="card-item-tag card-item-tag-atencao">⚠️ Atenção</span>}
+                          </div>
+                        )}
                         {éNovo && <span className="card-item-new-badge">🆕 Novo processo</span>}
                         <p className="card-text"><strong>Parte:</strong> {p.parte}</p>
                         <p className="card-text"><strong>Autuado em:</strong> {new Date(p.dataAutuacao).toLocaleDateString('pt-BR')}</p>
@@ -1065,11 +1112,37 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             <h2>🌿 {selected.numeroSEI}</h2>
             <span className="badge status-pendente">{selected.incidente?.ativo ? '🚧 Incidente' : ESTADOS_AMBIENTAL[selected.estado]?.label}</span>
           </div>
+          {(selected.urgente || selected.atencao || selected.orgaoPublico) && (
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', margin: '-6px 0 14px' }}>
+              {selected.urgente && <span className="card-item-tag card-item-tag-urgente">🔴 Urgente</span>}
+              {selected.atencao && <span className="card-item-tag card-item-tag-atencao">⚠️ Atenção</span>}
+              {selected.orgaoPublico && <span className="card-item-tag card-item-tag-orgao">🏛️ Órgão/Ente Público</span>}
+            </div>
+          )}
           <div className="info-grid">
             <div className="info-item"><label>Parte</label><p>{selected.parte}</p></div>
             <div className="info-item"><label>Valor da Multa</label><p>{fmtMoeda(selected.valorMulta)}</p></div>
             <div className="info-item"><label>Data de Autuação</label><p>{new Date(selected.dataAutuacao).toLocaleDateString('pt-BR')}</p></div>
             <div className="info-item"><label>Dias no Estado Atual</label><p>{diasNoEstado(selected.entradaNoEstadoEm)} dia(s)</p></div>
+          </div>
+
+          <div className="info-box pa-marcadores-box">
+            <label>🏷️ Marcadores do Processo</label>
+            <label className="pa-marcador-toggle">
+              <input type="checkbox" checked={!!selected.urgente}
+                onChange={(e) => { const v = e.target.checked; pedirConfirmacao(v ? 'Marcar este processo como URGENTE? Ele passará a aparecer no topo das listas.' : 'Remover a marcação de urgente deste processo?', () => marcarUrgente(selected, v)); }} />
+              <span>🔴 Urgente <em>— aparece no topo da lista, card amarelo</em></span>
+            </label>
+            <label className="pa-marcador-toggle">
+              <input type="checkbox" checked={!!selected.orgaoPublico}
+                onChange={(e) => { const v = e.target.checked; pedirConfirmacao(v ? 'Identificar este processo como Órgão/Ente Público?' : 'Remover a identificação de Órgão/Ente Público deste processo?', () => marcarOrgaoPublico(selected, v)); }} />
+              <span>🏛️ Órgão/Ente Público <em>— card verde</em></span>
+            </label>
+            <label className="pa-marcador-toggle">
+              <input type="checkbox" checked={!!selected.atencao}
+                onChange={(e) => { const v = e.target.checked; pedirConfirmacao(v ? 'Marcar este processo com atenção especial?' : 'Remover a marcação de atenção deste processo?', () => marcarAtencao(selected, v)); }} />
+              <span>⚠️ Atenção <em>— card amarelo</em></span>
+            </label>
           </div>
 
           <div className="info-box">
