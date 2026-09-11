@@ -571,6 +571,12 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
 
   const listaAtual = () => {
     let lista = mostrarConcluidos ? processos.filter((p) => !p.incidente?.ativo) : ativos;
+    // "Todos os Processos" (sem filtro por estado) também deve trazer os
+    // processos em incidente — mas só para quem enxerga o lado da ASSTEC
+    // (que é quem resolve incidentes), inclusive master nessa visão.
+    if (!estadoFiltro && (nucleoView === 'todos' || nucleoView === 'asstec')) {
+      lista = [...lista, ...incidentesAtivos];
+    }
     if (estadoFiltro) lista = lista.filter((p) => p.estado === estadoFiltro);
     if (nucleoFiltro !== 'todos') lista = lista.filter((p) => ESTADOS_AMBIENTAL[p.estado]?.nucleo === nucleoFiltro || ESTADOS_AMBIENTAL[p.estado]?.nucleo === 'ambos');
     lista = filtrarBusca(lista);
