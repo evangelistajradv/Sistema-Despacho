@@ -125,7 +125,11 @@ function parseMoeda(str) {
 }
 
 export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbiental, isMaster, podeAdministrar, theme, setTheme, onLogout, standalone }) {
-  const meuNucleo = isMaster ? 'master' : (nucleoAmbiental?.[currentUser] || null);
+  // O núcleo real do usuário é sempre o setor a que pertence (nucleoAmbiental),
+  // inclusive para o master — isso define a visão padrão da dashboard. O
+  // master (isMaster) mantém poderes administrativos plenos independente
+  // do núcleo; se por acaso não tiver setor configurado, cai em 'asstec'.
+  const meuNucleo = nucleoAmbiental?.[currentUser] || (isMaster ? 'asstec' : null);
 
   const [processos, setProcessos] = useState([]);
   const [view, setView] = useState('dashboard'); // dashboard | lista | detalhe | novo
@@ -157,6 +161,10 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const [motivoArquivar, setMotivoArquivar] = useState('');
   const [showExportModal, setShowExportModal] = useState(false);
   const [estadosExport, setEstadosExport] = useState(new Set());
+  // Visão da dashboard escolhida por quem tem privilégios administrativos
+  // (master ou "Admin. Ambiental Total"): 'todos' | 'asstec' | 'notificacoes'.
+  // null = ainda não escolheu, usa o próprio setor como padrão.
+  const [dashboardView, setDashboardView] = useState(null);
 
   // Toda movimentação de processo passa por aqui: exibe um modal de
   // confirmação antes de executar a ação de fato.
@@ -320,7 +328,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
 
   const criarProcesso = async () => {
     if (!novo.numeroSEI.trim() || !novo.parte.trim()) { alert('Preencha o número SEI e o nome da parte.'); return; }
-    const estadoInicial = (isMaster && estadoNovoProcesso) ? estadoNovoProcesso : 'triagem';
+    const estadoInicial = ((isMaster || podeAdministrar) && estadoNovoProcesso) ? estadoNovoProcesso : 'triagem';
     await addDoc(collection(db, 'processosAmbientais'), {
       numeroSEI: novo.numeroSEI.trim(),
       numeroSEIDigits: onlyDigits(novo.numeroSEI),
@@ -390,16 +398,22 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   };
 
   // ─── Visibilidade por núcleo ──────────────────────────────────────
-  const nucleoView = isMaster ? 'todos' : (consultaOutroNucleo ? (meuNucleo === 'asstec' ? 'notificacoes' : 'asstec') : meuNucleo);
-  const somenteConsulta = !isMaster && consultaOutroNucleo;
-  const podeAlternarNucleo = meuNucleo === 'asstec'; // só ASSTEC tem a toggle (Notificações não acessa o outro lado)
+  // Master e quem tem "Admin. Ambiental Total" podem alternar livremente
+  // entre Visão Total, ASSTEC e Notificações — por padrão, veem o setor a
+  // que pertencem (meuNucleo), não a Visão Total.
+  const podeAlternarVisaoTotal = isMaster || podeAdministrar;
+  const nucleoView = podeAlternarVisaoTotal
+    ? (dashboardView || meuNucleo || 'todos')
+    : (consultaOutroNucleo ? (meuNucleo === 'asstec' ? 'notificacoes' : 'asstec') : meuNucleo);
+  const somenteConsulta = !podeAlternarVisaoTotal && consultaOutroNucleo;
+  const podeAlternarNucleo = !podeAlternarVisaoTotal && meuNucleo === 'asstec'; // só ASSTEC "comum" tem a toggle simples (Notificações não acessa o outro lado)
 
   // Na DASHBOARD, cada núcleo só vê as classes que ele efetivamente movimenta
   // (estados com contagem automática de prazo — sem nenhuma ação manual — ficam
   // de fora dos cards; continuam visíveis em "Todos os Processos"). O master
   // vê tudo, inclusive as contagens automáticas, para ter visão completa.
   const estadosVisiveis = Object.entries(ESTADOS_AMBIENTAL)
-    .filter(([, e]) => (isMaster || !e.auto) && (nucleoView === 'todos' || e.nucleo === nucleoView || e.nucleo === 'ambos'))
+    .filter(([, e]) => (isMaster || podeAdministrar || !e.auto) && (nucleoView === 'todos' || e.nucleo === nucleoView || e.nucleo === 'ambos'))
     .sort((a, b) => a[1].ordem - b[1].ordem);
 
   const ativos = processos.filter((p) => !p.concluido && !p.incidente?.ativo);
@@ -702,6 +716,14 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             </div>
           </div>
 
+          {podeAlternarVisaoTotal && (
+            <div className="action-buttons" style={{ marginBottom: '16px' }}>
+              <button className={`btn-settings ${nucleoView === 'todos' ? 'active' : ''}`} onClick={() => setDashboardView('todos')}>🌐 Visão Total</button>
+              <button className={`btn-settings ${nucleoView === 'asstec' ? 'active' : ''}`} onClick={() => setDashboardView('asstec')}>🏢 Visão ASSTEC</button>
+              <button className={`btn-settings ${nucleoView === 'notificacoes' ? 'active' : ''}`} onClick={() => setDashboardView('notificacoes')}>📨 Visão Notificações</button>
+            </div>
+          )}
+
           {incidentesAtivos.length > 0 && (nucleoView === 'todos' || nucleoView === 'asstec') && (
             <div className="pa-dash-grid" style={{ marginBottom: '18px' }}>
               <div className="pa-card pa-card-incident" onClick={() => { setEstadoFiltro('__incidente__'); setView('lista'); }}>
@@ -740,9 +762,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           <div className="form-group"><label>Valor da Multa (R$)</label>
             <input type="text" placeholder="0,00" value={novo.valorMulta} onChange={(e) => setNovo({ ...novo, valorMulta: e.target.value })} />
           </div>
-          {isMaster && (
+          {(isMaster || podeAdministrar) && (
             <div className="form-group">
-              <label>Estado Inicial (opcional — master)</label>
+              <label>Estado Inicial (opcional)</label>
               <select value={estadoNovoProcesso} onChange={(e) => setEstadoNovoProcesso(e.target.value)}
                 style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--neutral-300)', borderRadius: '8px', background: 'var(--bg-card)', color: 'var(--text-primary)' }}>
                 <option value="">Padrão — Aguardando Triagem Inicial</option>
@@ -882,7 +904,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             <button className="btn-secondary" disabled={observacaoInput === (selected.observacao || '')} onClick={() => salvarObservacao(selected)}>Salvar Observação</button>
           </div>
 
-          {isMaster && (
+          {(isMaster || podeAdministrar) && (
             <div className="info-box">
               <label>✏️ Editar Informações do Processo</label>
               {editandoInfo ? (
