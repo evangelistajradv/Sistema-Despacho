@@ -411,6 +411,19 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     }
 
     const estadoInicial = ((isMaster || podeAdministrar) && estadoNovoProcesso) ? estadoNovoProcesso : 'triagem';
+
+    // Estados de contagem automática de prazo exigem a data de recebimento
+    // do AR/publicação do Edital já na autuação — sem ela o prazo de 20
+    // dias nunca seria calculado.
+    const infoPrazoInicial = CAMPO_DATA_POR_ESTADO_PRAZO[estadoInicial];
+    if (infoPrazoInicial && !dataInicioPrazoMaster) {
+      alert(`Para autuar diretamente em "${ESTADOS_AMBIENTAL[estadoInicial]?.label}", informe a ${infoPrazoInicial.label.toLowerCase()}.`);
+      return;
+    }
+
+    const datasIniciais = infoPrazoInicial ? { [infoPrazoInicial.campo]: dataInicioPrazoMaster } : {};
+    const prazoInicial = infoPrazoInicial ? { ...calcularPrazo20Dias(dataInicioPrazoMaster), origem: estadoInicial } : null;
+
     await addDoc(collection(db, 'processosAmbientais'), {
       numeroSEI: numeroSEITrim,
       numeroSEIDigits: onlyDigits(numeroSEITrim),
@@ -420,11 +433,13 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       dataAutuacao: new Date().toISOString().slice(0, 10),
       entradaNoEstadoEm: new Date().toISOString(),
       vistoPor: {},
-      datas: {}, historico: [], incidente: null, concluido: false,
+      datas: datasIniciais, historico: [], incidente: null, concluido: false,
+      ...(prazoInicial ? { prazo: prazoInicial } : {}),
       criadoEm: new Date().toISOString(), criadoPor: currentUser,
     });
     setNovo({ numeroSEI: '', parte: '', valorMulta: '' });
     setEstadoNovoProcesso('');
+    setDataInicioPrazoMaster('');
     const msgEstado = estadoInicial === 'triagem' ? 'Remetido à ASSTEC para triagem inicial.' : `Autuado diretamente em "${ESTADOS_AMBIENTAL[estadoInicial]?.label}".`;
     alert(`✅ Processo ${numeroSEITrim} autuado com sucesso!\n\n${msgEstado}`);
     setView('dashboard');
@@ -919,7 +934,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           {(isMaster || podeAdministrar) && (
             <div className="form-group">
               <label>Estado Inicial (opcional)</label>
-              <select value={estadoNovoProcesso} onChange={(e) => setEstadoNovoProcesso(e.target.value)}
+              <select value={estadoNovoProcesso} onChange={(e) => { setEstadoNovoProcesso(e.target.value); setDataInicioPrazoMaster(''); }}
                 style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--neutral-300)', borderRadius: '8px', background: 'var(--bg-card)', color: 'var(--text-primary)' }}>
                 <option value="">Padrão — Aguardando Triagem Inicial</option>
                 {Object.entries(ESTADOS_AMBIENTAL).sort((a, b) => a[1].ordem - b[1].ordem).map(([id, e]) => (
@@ -928,9 +943,16 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
               </select>
             </div>
           )}
+          {CAMPO_DATA_POR_ESTADO_PRAZO[estadoNovoProcesso] && (
+            <div className="form-group">
+              <label>{CAMPO_DATA_POR_ESTADO_PRAZO[estadoNovoProcesso].label} *</label>
+              <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: '2px 0 6px' }}>Obrigatório — é a partir dela que o prazo de 20 dias é calculado.</p>
+              <input type="date" value={dataInicioPrazoMaster} onChange={(e) => setDataInicioPrazoMaster(e.target.value)} />
+            </div>
+          )}
           <div className="form-actions">
             <button className="btn-primary" onClick={criarProcesso}>Autuar Processo</button>
-            <button className="btn-secondary" onClick={() => setView('dashboard')}>Cancelar</button>
+            <button className="btn-secondary" onClick={() => { setView('dashboard'); setEstadoNovoProcesso(''); setDataInicioPrazoMaster(''); }}>Cancelar</button>
           </div>
         </div>
       )}
