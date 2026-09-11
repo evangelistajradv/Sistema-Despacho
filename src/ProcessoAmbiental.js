@@ -22,6 +22,7 @@ const ESTADOS_AMBIENTAL = {
   pendente_certificacao_edital:         { label: 'Pendente de Certificação (Edital)',                    nucleo: 'notificacoes', ordem: 6.1, certificacao: true },
   aguardando_saneamento:                { label: 'Aguardando Saneamento/Julgamento',                     nucleo: 'asstec',       ordem: 7 },
   pendente_diligencia:                  { label: 'Pendente de Diligência',                                nucleo: 'notificacoes', ordem: 8 },
+  aguardando_analise_minuta_gabinete:   { label: 'Aguardando Análise de Minuta pelo Gabinete',           nucleo: 'asstec',       ordem: 8.5 },
   pendente_notificacao_decisao:         { label: 'Pendente de Notificação de Decisão (AR/Email/WPP)',    nucleo: 'notificacoes', ordem: 9 },
   aguardando_prazo_notificacao_decisao: { label: 'Aguardando Decurso de Prazo de Notificação',           nucleo: 'notificacoes', ordem: 10, auto: true },
   pendente_certificacao_decisao:        { label: 'Pendente de Certificação',                             nucleo: 'notificacoes', ordem: 10.1, certificacao: true },
@@ -31,6 +32,7 @@ const ESTADOS_AMBIENTAL = {
   pendente_despacho_consema:            { label: 'Pendente de Despacho para Submissão ao CONSEMA',       nucleo: 'asstec',       ordem: 13 },
   cobranca_administrativa:              { label: 'Cobrança Administrativa Ativa',                        nucleo: 'ambos',        ordem: 14, auto: true },
   pendente_envio_pge:                   { label: 'Pendente de Envio para PGE',                            nucleo: 'asstec',       ordem: 15 },
+  arquivado:                            { label: 'Processos Arquivados',                                 nucleo: 'ambos',        ordem: 16 },
 };
 
 // Migração automática ao final do prazo (aplicada pelo verificador periódico)
@@ -109,6 +111,19 @@ const onlyDigits = (s) => (s || '').replace(/\D/g, '');
 
 const fmtMoeda = (v) => (Number(v) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
+// Interpreta valores no padrão brasileiro (ponto = milhar, vírgula = decimal).
+// Ao colar um valor como "170.000,00", sem isso o ponto seria confundido com
+// separador decimal e o valor cortado incorretamente.
+function parseMoeda(str) {
+  if (!str) return 0;
+  let s = str.toString().trim().replace(/[^\d.,-]/g, '');
+  if (!s) return 0;
+  if (s.includes(',')) {
+    s = s.replace(/\./g, '').replace(',', '.');
+  }
+  return parseFloat(s) || 0;
+}
+
 export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbiental, isMaster, podeAdministrar, theme, setTheme, onLogout, standalone }) {
   const meuNucleo = isMaster ? 'master' : (nucleoAmbiental?.[currentUser] || null);
 
@@ -131,6 +146,17 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const [estadoManualMaster, setEstadoManualMaster] = useState('');
   const [selecionados, setSelecionados] = useState(new Set());
   const [estadoLote, setEstadoLote] = useState('');
+  const [estadoNovoProcesso, setEstadoNovoProcesso] = useState('');
+  const [observacaoInput, setObservacaoInput] = useState('');
+  const [editandoInfo, setEditandoInfo] = useState(false);
+  const [editForm, setEditForm] = useState({ numeroSEI: '', parte: '', valorMulta: '' });
+  const [showArNaoCumpridoForm, setShowArNaoCumpridoForm] = useState(false);
+  const [novoEndereco, setNovoEndereco] = useState('');
+  const [semNovoEndereco, setSemNovoEndereco] = useState(false);
+  const [showArquivarForm, setShowArquivarForm] = useState(false);
+  const [motivoArquivar, setMotivoArquivar] = useState('');
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [estadosExport, setEstadosExport] = useState(new Set());
 
   // Toda movimentação de processo passa por aqui: exibe um modal de
   // confirmação antes de executar a ação de fato.
@@ -146,6 +172,19 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   }, []);
 
   const selected = processos.find((p) => p.id === selectedId) || null;
+
+  // Sincroniza os campos locais (observação/edição) sempre que o processo
+  // selecionado muda, e reseta os formulários auxiliares de AR e arquivamento.
+  useEffect(() => {
+    setObservacaoInput(selected?.observacao || '');
+    setEditandoInfo(false);
+    setShowArNaoCumpridoForm(false);
+    setNovoEndereco('');
+    setSemNovoEndereco(false);
+    setShowArquivarForm(false);
+    setMotivoArquivar('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
 
   const moverProcesso = async (p, novoEstado, tipo = 'manual', extra = {}) => {
     const historico = [...(p.historico || []), { de: p.estado, para: novoEstado, em: new Date().toISOString(), por: currentUser, tipo }];
@@ -182,7 +221,11 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     moverProcesso(p, estadoDestino, 'manual', { [`datas.${campoData}`]: valor, prazo: { inicio, fim, origem: estadoDestino } });
   };
 
-  const certificarAR = (p, entregue) => moverProcesso(p, entregue ? 'aguardando_saneamento' : 'pendente_edital', 'automatica');
+  // Chegar aqui já significa que o AR foi cumprido (o fluxo só entra em
+  // pendente_certificacao_ar após confirmação de recebimento + decurso do
+  // prazo). Resta apenas certificar e seguir para Saneamento/Julgamento,
+  // onde se apura se houve ou não defesa.
+  const certificarAR = (p) => moverProcesso(p, 'aguardando_saneamento', 'automatica');
   const certificarEdital = (p) => moverProcesso(p, 'aguardando_saneamento', 'automatica');
   const certificarDecisao = (p, entregue, recurso) => {
     if (!entregue) return moverProcesso(p, 'pendente_edital_decisao', 'automatica');
@@ -204,6 +247,48 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   // AR devolvido sem cumprimento (não entregue) — pula direto para o Edital,
   // sem aguardar os 20 dias de contagem (não há AR válido para contar).
   const arNaoCumprido = (p) => moverProcesso(p, 'pendente_edital', 'manual', { 'datas.arNaoCumpridoEm': new Date().toISOString().slice(0, 10) });
+
+  // Quando um novo endereço é encontrado após AR não cumprido, o processo
+  // volta para Pendente de Notificação (novo ciclo de notificação), em vez
+  // de seguir direto para o Edital.
+  const registrarNovoEnderecoENotificar = (p, endereco) => moverProcesso(p, 'pendente_notificacao', 'manual', {
+    'datas.novoEnderecoEncontradoEm': new Date().toISOString().slice(0, 10),
+    novoEndereco: endereco,
+  });
+
+  // Salva a observação livre do processo (campo de anotações gerais).
+  const salvarObservacao = async (p) => {
+    await updateDoc(doc(db, 'processosAmbientais', p.id), { observacao: observacaoInput });
+  };
+
+  // Master pode corrigir os dados cadastrais do processo (não é movimentação
+  // de estado, então não passa pelo histórico de tramitação).
+  const salvarEdicaoInfo = async (p) => {
+    if (!editForm.numeroSEI.trim() || !editForm.parte.trim()) { alert('Preencha o número SEI e o nome da parte.'); return; }
+    await updateDoc(doc(db, 'processosAmbientais', p.id), {
+      numeroSEI: editForm.numeroSEI.trim(),
+      numeroSEIDigits: onlyDigits(editForm.numeroSEI),
+      parte: editForm.parte.trim(),
+      valorMulta: parseMoeda(editForm.valorMulta),
+    });
+    setEditandoInfo(false);
+  };
+
+  // Arquivamento definitivo — disponível de forma discreta em qualquer
+  // processo, e também embutido na etapa de certificação pós-decisão/recurso.
+  // Sempre exige motivo e registra quem arquivou.
+  const arquivarProcesso = async (p, motivo) => {
+    const historico = [...(p.historico || []), { de: p.estado, para: 'arquivado', em: new Date().toISOString(), por: currentUser, tipo: 'manual', motivo }];
+    await updateDoc(doc(db, 'processosAmbientais', p.id), {
+      estado: 'arquivado',
+      entradaNoEstadoEm: new Date().toISOString(),
+      vistoPor: {},
+      arquivamento: { motivo, arquivadoEm: new Date().toISOString(), arquivadoPor: currentUser },
+      historico,
+    });
+    setShowArquivarForm(false);
+    setMotivoArquivar('');
+  };
 
   // Somente o master pode excluir um processo definitivamente.
   const excluirProcesso = async (p) => {
@@ -235,12 +320,13 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
 
   const criarProcesso = async () => {
     if (!novo.numeroSEI.trim() || !novo.parte.trim()) { alert('Preencha o número SEI e o nome da parte.'); return; }
+    const estadoInicial = (isMaster && estadoNovoProcesso) ? estadoNovoProcesso : 'triagem';
     await addDoc(collection(db, 'processosAmbientais'), {
       numeroSEI: novo.numeroSEI.trim(),
       numeroSEIDigits: onlyDigits(novo.numeroSEI),
       parte: novo.parte.trim(),
-      valorMulta: parseFloat(novo.valorMulta.replace(',', '.')) || 0,
-      estado: 'triagem',
+      valorMulta: parseMoeda(novo.valorMulta),
+      estado: estadoInicial,
       dataAutuacao: new Date().toISOString().slice(0, 10),
       entradaNoEstadoEm: new Date().toISOString(),
       vistoPor: {},
@@ -248,7 +334,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       criadoEm: new Date().toISOString(), criadoPor: currentUser,
     });
     setNovo({ numeroSEI: '', parte: '', valorMulta: '' });
-    alert(`✅ Processo ${novo.numeroSEI.trim()} autuado com sucesso!\n\nRemetido à ASSTEC para triagem inicial.`);
+    setEstadoNovoProcesso('');
+    const msgEstado = estadoInicial === 'triagem' ? 'Remetido à ASSTEC para triagem inicial.' : `Autuado diretamente em "${ESTADOS_AMBIENTAL[estadoInicial]?.label}".`;
+    alert(`✅ Processo ${novo.numeroSEI.trim()} autuado com sucesso!\n\n${msgEstado}`);
     setView('dashboard');
   };
 
@@ -359,6 +447,62 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
 
   const nomeUsuario = ALL_USERS?.[currentUser]?.nome || currentUser;
 
+  // ─── Exportação de planilha (dashboard) ──────────────────────────
+  const abrirExportModal = () => {
+    setEstadosExport(new Set(Object.keys(ESTADOS_AMBIENTAL)));
+    setShowExportModal(true);
+  };
+
+  const toggleEstadoExport = (id) => {
+    setEstadosExport((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const exportarPlanilha = () => {
+    const lista = processos.filter((p) => estadosExport.has(p.estado));
+    const linhas = [
+      ['Número SEI', 'Parte', 'Estado'],
+      ...lista.map((p) => [p.numeroSEI, p.parte, ESTADOS_AMBIENTAL[p.estado]?.label || p.estado]),
+    ];
+    const csv = linhas.map((row) => row.map((cell) => `"${(cell || '').toString().replace(/"/g, '""')}"`).join(';')).join('\r\n');
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `processos_ambientais_${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setShowExportModal(false);
+  };
+
+  // Formulário de arquivamento com motivo obrigatório — sempre exibido ao
+  // lado do botão "Gerar Incidente", no rodapé do processo.
+  const renderArquivarInline = (p) => (
+    showArquivarForm ? (
+      <div className="info-box" style={{ marginTop: '14px' }}>
+        <label>📁 Arquivar Processo</label>
+        <div className="form-group">
+          <label>Motivo do arquivamento *</label>
+          <textarea value={motivoArquivar} onChange={(e) => setMotivoArquivar(e.target.value)} placeholder="Descreva o motivo do arquivamento..." />
+        </div>
+        <div className="form-actions">
+          <button className="btn-delete" disabled={!motivoArquivar.trim()}
+            onClick={() => pedirConfirmacao(`Confirma o arquivamento definitivo do processo ${p.numeroSEI}?`, () => arquivarProcesso(p, motivoArquivar.trim()))}>
+            Confirmar Arquivamento
+          </button>
+          <button className="btn-secondary" onClick={() => { setShowArquivarForm(false); setMotivoArquivar(''); }}>Cancelar</button>
+        </div>
+      </div>
+    ) : (
+      <button className="link-btn" style={{ marginTop: '10px', fontSize: '12px', color: 'var(--text-secondary)' }} onClick={() => setShowArquivarForm(true)}>📁 Arquivar processo</button>
+    )
+  );
+
   // ─── Detalhe do processo: ações por estado ───────────────────────
   const renderAcaoEstado = (p) => {
     const est = ESTADOS_AMBIENTAL[p.estado];
@@ -383,11 +527,42 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                 onClick={() => pedirConfirmacao(`Confirma o recebimento do AR em ${new Date(dataInput + 'T12:00:00').toLocaleDateString('pt-BR')}? A contagem do prazo de 20 dias será iniciada.`, () => { iniciarPrazo(p, 'recebimentoAR', dataInput, 'aguardando_prazo_ar'); setDataInput(''); })}>
                 Confirmar Recebimento do AR
               </button>
-              <button className="btn-secondary"
-                onClick={() => pedirConfirmacao('Confirma que o AR voltou não cumprido (não entregue)? O processo seguirá direto para Pendente de Edital.', () => arNaoCumprido(p))}>
-                AR Não Cumprido
-              </button>
+              {!showArNaoCumpridoForm && (
+                <button className="btn-secondary" onClick={() => setShowArNaoCumpridoForm(true)}>AR Não Cumprido</button>
+              )}
             </div>
+
+            {showArNaoCumpridoForm && (
+              <div className="info-box" style={{ marginTop: '14px' }}>
+                <label>⚠️ AR Não Cumprido — Pesquisa de Novo Endereço</label>
+                <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+                  Antes de encaminhar para o Edital, pesquise e informe abaixo eventual(is) novo(s) endereço(s) encontrado(s) do interessado, para que seja expedida uma nova notificação. Se nenhum endereço novo foi encontrado, marque a opção correspondente.
+                </p>
+                <div className="form-group">
+                  <label>Novo(s) Endereço(s) Encontrado(s)</label>
+                  <textarea value={novoEndereco} disabled={semNovoEndereco}
+                    onChange={(e) => setNovoEndereco(e.target.value)}
+                    placeholder="Descreva o(s) novo(s) endereço(s) encontrado(s)..." />
+                </div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', margin: '8px 0' }}>
+                  <input type="checkbox" checked={semNovoEndereco} onChange={(e) => { setSemNovoEndereco(e.target.checked); if (e.target.checked) setNovoEndereco(''); }} />
+                  Não foram encontrados novos endereços
+                </label>
+                <div className="form-actions">
+                  <button className="btn-primary" disabled={!semNovoEndereco && !novoEndereco.trim()}
+                    onClick={() => {
+                      if (semNovoEndereco || !novoEndereco.trim()) {
+                        pedirConfirmacao('Confirma que o AR voltou não cumprido e que nenhum novo endereço foi encontrado? O processo seguirá para Pendente de Edital.', () => { arNaoCumprido(p); setShowArNaoCumpridoForm(false); });
+                      } else {
+                        pedirConfirmacao('Confirma o novo endereço encontrado? O processo voltará para Pendente de Notificação, para expedição de nova notificação.', () => { registrarNovoEnderecoENotificar(p, novoEndereco.trim()); setShowArNaoCumpridoForm(false); setNovoEndereco(''); });
+                      }
+                    }}>
+                    Confirmar
+                  </button>
+                  <button className="btn-secondary" onClick={() => { setShowArNaoCumpridoForm(false); setNovoEndereco(''); setSemNovoEndereco(false); }}>Cancelar</button>
+                </div>
+              </div>
+            )}
           </div>
         );
 
@@ -405,15 +580,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
         );
 
       case 'pendente_certificacao_ar':
-        return (
-          <div className="form-group">
-            <label>O AR foi entregue (cumprido)?</label>
-            <div className="action-buttons">
-              <button className="btn-approve" onClick={() => pedirConfirmacao('Confirma que o AR foi entregue? O processo seguirá para Saneamento/Julgamento.', () => certificarAR(p, true))}>Sim, foi entregue</button>
-              <button className="btn-secondary" onClick={() => pedirConfirmacao('Confirma que o AR não retornou? O processo seguirá para Pendente de Edital.', () => certificarAR(p, false))}>Não retornou</button>
-            </div>
-          </div>
-        );
+        return <button className="btn-approve" onClick={() => pedirConfirmacao('Certificar o decurso do prazo? O processo será certificado e seguirá para Saneamento/Julgamento, onde se apura se houve ou não defesa.', () => certificarAR(p))}>Processo Certificado → Saneamento/Julgamento</button>;
 
       case 'pendente_edital':
       case 'pendente_edital_decisao':
@@ -439,9 +606,12 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
         return (
           <div className="action-buttons">
             <button className="btn-secondary" onClick={() => pedirConfirmacao('Converter este processo em Diligência?', () => moverProcesso(p, 'pendente_diligencia'))}>Converter em Diligência</button>
-            <button className="btn-primary" onClick={() => pedirConfirmacao('Confirma o julgamento? O processo seguirá para Notificação de Decisão.', () => moverProcesso(p, 'pendente_notificacao_decisao'))}>Julgado → Notificar Decisão</button>
+            <button className="btn-primary" onClick={() => pedirConfirmacao('Disponibilizar este processo para Análise de Minuta pelo Gabinete?', () => moverProcesso(p, 'aguardando_analise_minuta_gabinete'))}>Disponibilizar para o Gabinete</button>
           </div>
         );
+
+      case 'aguardando_analise_minuta_gabinete':
+        return <button className="btn-primary" onClick={() => pedirConfirmacao('Confirma que a minuta foi analisada pelo Gabinete? O processo seguirá para Notificação de Decisão.', () => moverProcesso(p, 'pendente_notificacao_decisao'))}>Minuta Analisada → Notificar Decisão</button>;
 
       case 'pendente_diligencia': {
         const dias = diasNoEstado(p.entradaNoEstadoEm);
@@ -492,8 +662,15 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
         );
 
       case 'pendente_despacho_consema':
-      case 'pendente_envio_pge':
         return <button className="btn-primary" onClick={() => pedirConfirmacao('Concluir/arquivar este processo? Ele sairá das listas ativas.', () => concluirProcesso(p))}>Concluir / Arquivar Processo</button>;
+
+      case 'pendente_envio_pge':
+        return (
+          <div className="info-box">
+            <label>Débito adimplido perante a PGE?</label>
+            <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Use a opção "📁 Arquivar Processo" abaixo para confirmar a adimplência — o processo será movido automaticamente para Processos Arquivados.</p>
+          </div>
+        );
 
       default:
         return null;
@@ -518,6 +695,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                 </button>
               )}
               <button className="btn-settings" onClick={() => { setEstadoFiltro(null); setView('lista'); }}>Todos os Processos</button>
+              <button className="btn-settings" onClick={abrirExportModal}>📥 Exportar Planilha</button>
               {!somenteConsulta && (
                 <button className="btn-new" onClick={() => setView('novo')}>+ Novo Processo</button>
               )}
@@ -562,6 +740,18 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           <div className="form-group"><label>Valor da Multa (R$)</label>
             <input type="text" placeholder="0,00" value={novo.valorMulta} onChange={(e) => setNovo({ ...novo, valorMulta: e.target.value })} />
           </div>
+          {isMaster && (
+            <div className="form-group">
+              <label>Estado Inicial (opcional — master)</label>
+              <select value={estadoNovoProcesso} onChange={(e) => setEstadoNovoProcesso(e.target.value)}
+                style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--neutral-300)', borderRadius: '8px', background: 'var(--bg-card)', color: 'var(--text-primary)' }}>
+                <option value="">Padrão — Aguardando Triagem Inicial</option>
+                {Object.entries(ESTADOS_AMBIENTAL).sort((a, b) => a[1].ordem - b[1].ordem).map(([id, e]) => (
+                  <option key={id} value={id}>{e.label}</option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="form-actions">
             <button className="btn-primary" onClick={criarProcesso}>Autuar Processo</button>
             <button className="btn-secondary" onClick={() => setView('dashboard')}>Cancelar</button>
@@ -684,6 +874,41 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             <div className="info-item"><label>Dias no Estado Atual</label><p>{diasNoEstado(selected.entradaNoEstadoEm)} dia(s)</p></div>
           </div>
 
+          <div className="info-box">
+            <label>📝 Observações</label>
+            <div className="form-group">
+              <textarea value={observacaoInput} onChange={(e) => setObservacaoInput(e.target.value)} placeholder="Anotações gerais sobre o processo..." />
+            </div>
+            <button className="btn-secondary" disabled={observacaoInput === (selected.observacao || '')} onClick={() => salvarObservacao(selected)}>Salvar Observação</button>
+          </div>
+
+          {isMaster && (
+            <div className="info-box">
+              <label>✏️ Editar Informações do Processo</label>
+              {editandoInfo ? (
+                <>
+                  <div className="form-group"><label>Número SEI</label>
+                    <input type="text" value={editForm.numeroSEI} onChange={(e) => setEditForm({ ...editForm, numeroSEI: e.target.value })} />
+                  </div>
+                  <div className="form-group"><label>Nome da Parte</label>
+                    <input type="text" value={editForm.parte} onChange={(e) => setEditForm({ ...editForm, parte: e.target.value })} />
+                  </div>
+                  <div className="form-group"><label>Valor da Multa (R$)</label>
+                    <input type="text" value={editForm.valorMulta} onChange={(e) => setEditForm({ ...editForm, valorMulta: e.target.value })} />
+                  </div>
+                  <div className="form-actions">
+                    <button className="btn-primary" onClick={() => pedirConfirmacao('Confirma a alteração dos dados cadastrais deste processo?', () => salvarEdicaoInfo(selected))}>Salvar Alterações</button>
+                    <button className="btn-secondary" onClick={() => setEditandoInfo(false)}>Cancelar</button>
+                  </div>
+                </>
+              ) : (
+                <button className="btn-secondary" onClick={() => { setEditForm({ numeroSEI: selected.numeroSEI, parte: selected.parte, valorMulta: String(selected.valorMulta || '') }); setEditandoInfo(true); }}>
+                  Editar Informações
+                </button>
+              )}
+            </div>
+          )}
+
           {(isMaster || podeAdministrar) && (
             <div className="info-box">
               <label>⚙️ Controles Administrativos</label>
@@ -707,6 +932,14 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                 onClick={() => pedirConfirmacao(`Excluir definitivamente o processo ${selected.numeroSEI}? Esta ação não pode ser desfeita.`, () => excluirProcesso(selected))}>
                 🗑️ Excluir Processo
               </button>
+            </div>
+          )}
+
+          {selected.estado === 'arquivado' && selected.arquivamento && (
+            <div className="info-box">
+              <label>📁 Processo Arquivado</label>
+              <p><strong>Motivo:</strong> {selected.arquivamento.motivo}</p>
+              <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Arquivado em {new Date(selected.arquivamento.arquivadoEm).toLocaleDateString('pt-BR')} por {ALL_USERS?.[selected.arquivamento.arquivadoPor]?.nome || selected.arquivamento.arquivadoPor}</p>
             </div>
           )}
 
@@ -744,12 +977,14 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             </div>
           ) : (
             <>
-              <div className="info-box">
-                <label>Ação Disponível</label>
-                {renderAcaoEstado(selected)}
-              </div>
+              {selected.estado !== 'arquivado' && (
+                <div className="info-box">
+                  <label>Ação Disponível</label>
+                  {renderAcaoEstado(selected)}
+                </div>
+              )}
 
-              {(isMaster || meuNucleo === 'asstec') && !somenteConsulta && (
+              {(isMaster || meuNucleo === 'asstec') && !somenteConsulta && selected.estado !== 'arquivado' && (
                 showIncidenteModal ? (
                   <div className="info-box">
                     <label>🚧 Gerar Incidente</label>
@@ -772,8 +1007,13 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                       <button className="btn-secondary" onClick={() => setShowIncidenteModal(false)}>Cancelar</button>
                     </div>
                   </div>
+                ) : showArquivarForm ? (
+                  renderArquivarInline(selected)
                 ) : (
-                  <button className="btn-delete" style={{ marginTop: '14px' }} onClick={() => setShowIncidenteModal(true)}>🚧 Gerar Incidente</button>
+                  <div className="action-buttons" style={{ marginTop: '14px' }}>
+                    <button className="btn-delete" onClick={() => setShowIncidenteModal(true)}>🚧 Gerar Incidente</button>
+                    <button className="btn-secondary" onClick={() => setShowArquivarForm(true)}>📁 Arquivar Processo</button>
+                  </div>
                 )
               )}
             </>
@@ -789,6 +1029,31 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             <div className="modal-actions">
               <button className="btn-primary" onClick={() => { confirmAction.onConfirm(); setConfirmAction(null); }}>Confirmar</button>
               <button className="btn-secondary" onClick={() => setConfirmAction(null)}>Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showExportModal && (
+        <div className="modal-overlay" onClick={() => setShowExportModal(false)}>
+          <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '480px' }}>
+            <h4>📥 Exportar Planilha</h4>
+            <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '10px' }}>Selecione os estados que devem constar na planilha (número do processo, nome e estado).</p>
+            <div className="action-buttons" style={{ marginBottom: '10px' }}>
+              <button className="btn-secondary" onClick={() => setEstadosExport(new Set(Object.keys(ESTADOS_AMBIENTAL)))}>Selecionar Todos</button>
+              <button className="btn-secondary" onClick={() => setEstadosExport(new Set())}>Desmarcar Todos</button>
+            </div>
+            <div style={{ maxHeight: '280px', overflowY: 'auto', border: '1px solid var(--neutral-300)', borderRadius: '8px', padding: '8px' }}>
+              {Object.entries(ESTADOS_AMBIENTAL).sort((a, b) => a[1].ordem - b[1].ordem).map(([id, e]) => (
+                <label key={id} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', padding: '4px 0' }}>
+                  <input type="checkbox" checked={estadosExport.has(id)} onChange={() => toggleEstadoExport(id)} />
+                  {e.label}
+                </label>
+              ))}
+            </div>
+            <div className="modal-actions" style={{ marginTop: '14px' }}>
+              <button className="btn-primary" disabled={estadosExport.size === 0} onClick={exportarPlanilha}>Exportar</button>
+              <button className="btn-secondary" onClick={() => setShowExportModal(false)}>Cancelar</button>
             </div>
           </div>
         </div>
