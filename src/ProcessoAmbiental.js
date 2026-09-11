@@ -29,7 +29,7 @@ const ESTADOS_AMBIENTAL = {
   pendente_edital_decisao:              { label: 'Pendente de Edital da Decisão',                        nucleo: 'asstec',       ordem: 11 },
   aguardando_prazo_recurso_edital:      { label: 'Aguardando Decurso do Prazo para Recurso de Edital',   nucleo: 'notificacoes', ordem: 12, auto: true },
   pendente_certificacao_edital_decisao: { label: 'Pendente de Certificação',                             nucleo: 'notificacoes', ordem: 12.1, certificacao: true },
-  pendente_despacho_consema:            { label: 'Pendente de Despacho para Submissão ao CONSEMA',       nucleo: 'asstec',       ordem: 13 },
+  pendente_despacho_consema:            { label: 'Pendente de Despacho/Remessa para CONSEMA',            nucleo: 'asstec',       ordem: 13 },
   cobranca_administrativa:              { label: 'Cobrança Administrativa Ativa',                        nucleo: 'ambos',        ordem: 14, auto: true },
   pendente_envio_pge:                   { label: 'Pendente de Envio para PGE',                            nucleo: 'asstec',       ordem: 15 },
   arquivado:                            { label: 'Processos Arquivados',                                 nucleo: 'ambos',        ordem: 16 },
