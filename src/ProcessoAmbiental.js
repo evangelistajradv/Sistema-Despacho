@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase-config';
-import { collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import { collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, getDocs, query, where } from 'firebase/firestore';
 
 // ═══════════════════════════════════════════════════════════════════
 // PROCESSO ADMINISTRATIVO AMBIENTAL — módulo separado e autônomo do
@@ -273,9 +273,21 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   // de estado, então não passa pelo histórico de tramitação).
   const salvarEdicaoInfo = async (p) => {
     if (!editForm.numeroSEI.trim() || !editForm.parte.trim()) { alert('Preencha o número SEI e o nome da parte.'); return; }
+
+    const numeroSEITrim = editForm.numeroSEI.trim();
+    // Se o número SEI foi alterado, verifica se não existe outro processo com esse número
+    if (numeroSEITrim !== p.numeroSEI) {
+      const q = query(collection(db, 'processosAmbientais'), where('numeroSEI', '==', numeroSEITrim));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        alert(`❌ Já existe um processo cadastrado com o número SEI ${numeroSEITrim}.\n\nEscolha outro número.`);
+        return;
+      }
+    }
+
     await updateDoc(doc(db, 'processosAmbientais', p.id), {
-      numeroSEI: editForm.numeroSEI.trim(),
-      numeroSEIDigits: onlyDigits(editForm.numeroSEI),
+      numeroSEI: numeroSEITrim,
+      numeroSEIDigits: onlyDigits(numeroSEITrim),
       parte: editForm.parte.trim(),
       valorMulta: parseMoeda(editForm.valorMulta),
     });
@@ -328,10 +340,20 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
 
   const criarProcesso = async () => {
     if (!novo.numeroSEI.trim() || !novo.parte.trim()) { alert('Preencha o número SEI e o nome da parte.'); return; }
+
+    // Verifica se já existe processo com esse número SEI (evita duplicação)
+    const numeroSEITrim = novo.numeroSEI.trim();
+    const q = query(collection(db, 'processosAmbientais'), where('numeroSEI', '==', numeroSEITrim));
+    const snap = await getDocs(q);
+    if (!snap.empty) {
+      alert(`❌ Já existe um processo cadastrado com o número SEI ${numeroSEITrim}.\n\nVerifique o número e tente novamente.`);
+      return;
+    }
+
     const estadoInicial = ((isMaster || podeAdministrar) && estadoNovoProcesso) ? estadoNovoProcesso : 'triagem';
     await addDoc(collection(db, 'processosAmbientais'), {
-      numeroSEI: novo.numeroSEI.trim(),
-      numeroSEIDigits: onlyDigits(novo.numeroSEI),
+      numeroSEI: numeroSEITrim,
+      numeroSEIDigits: onlyDigits(numeroSEITrim),
       parte: novo.parte.trim(),
       valorMulta: parseMoeda(novo.valorMulta),
       estado: estadoInicial,
@@ -344,7 +366,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     setNovo({ numeroSEI: '', parte: '', valorMulta: '' });
     setEstadoNovoProcesso('');
     const msgEstado = estadoInicial === 'triagem' ? 'Remetido à ASSTEC para triagem inicial.' : `Autuado diretamente em "${ESTADOS_AMBIENTAL[estadoInicial]?.label}".`;
-    alert(`✅ Processo ${novo.numeroSEI.trim()} autuado com sucesso!\n\n${msgEstado}`);
+    alert(`✅ Processo ${numeroSEITrim} autuado com sucesso!\n\n${msgEstado}`);
     setView('dashboard');
   };
 

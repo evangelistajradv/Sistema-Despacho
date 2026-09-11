@@ -1308,7 +1308,13 @@ export default function SistemaDespacho() {
   }, [activeTab]);
 
   const handleLogout = () => {
+    if (!window.confirm('Deseja realmente sair do sistema?')) return;
+    // Limpa restoredUser junto com authenticated (no mesmo lote de estado) —
+    // sem isso, o efeito de restauração de sessão via onAuthStateChanged
+    // ainda via o usuário antigo por um instante e logava de volta
+    // automaticamente, exigindo clicar em "Sair" duas vezes.
     signOut(auth).catch((e) => console.warn('Erro ao sair:', e.message));
+    setRestoredUser(null);
     setAuthenticated(false); setCurrentUser(null); setLoginPass('');
   };
 
