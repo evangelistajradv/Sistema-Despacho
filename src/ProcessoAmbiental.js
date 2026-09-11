@@ -163,6 +163,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const [resolverForm, setResolverForm] = useState({ tipoResolucao: '', observacao: '' });
   const [confirmAction, setConfirmAction] = useState(null); // { mensagem, onConfirm }
   const [estadoManualMaster, setEstadoManualMaster] = useState('');
+  const [dataInicioPrazoMaster, setDataInicioPrazoMaster] = useState('');
+  const [editandoDataPrazo, setEditandoDataPrazo] = useState(false);
+  const [novaDataPrazo, setNovaDataPrazo] = useState('');
   const [selecionados, setSelecionados] = useState(new Set());
   const [estadoLote, setEstadoLote] = useState('');
   const [estadoNovoProcesso, setEstadoNovoProcesso] = useState('');
@@ -209,6 +212,10 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     setSemNovoEndereco(false);
     setShowArquivarForm(false);
     setMotivoArquivar('');
+    setEstadoManualMaster('');
+    setDataInicioPrazoMaster('');
+    setEditandoDataPrazo(false);
+    setNovaDataPrazo('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
@@ -246,6 +253,29 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const iniciarPrazo = (p, campoData, valor, estadoDestino) => {
     const { inicio, fim } = calcularPrazo20Dias(valor);
     moverProcesso(p, estadoDestino, 'manual', { [`datas.${campoData}`]: valor, prazo: { inicio, fim, origem: estadoDestino } });
+  };
+
+  // Mapeia cada estado de contagem automática de prazo (AR/Edital, na etapa
+  // de defesa ou de recurso) para o campo de data correspondente — usado
+  // tanto para exigir a data quando o master move manualmente para um desses
+  // estados, quanto para permitir corrigir essa data depois.
+  const CAMPO_DATA_POR_ESTADO_PRAZO = {
+    aguardando_prazo_ar: { campo: 'recebimentoAR', label: 'Data de Recebimento do AR' },
+    aguardando_prazo_edital: { campo: 'publicacaoEdital', label: 'Data de Publicação do Edital' },
+    aguardando_prazo_notificacao_decisao: { campo: 'notificacaoDecisao', label: 'Data de Notificação da Decisão' },
+    aguardando_prazo_recurso_edital: { campo: 'publicacaoEditalDecisao', label: 'Data de Publicação do Edital da Decisão' },
+  };
+
+  // Corrige a data de início de um prazo já em contagem (defesa ou recurso),
+  // recalculando o prazo de 20 dias a partir da nova data.
+  const corrigirDataPrazo = (p, novaData) => {
+    const info = CAMPO_DATA_POR_ESTADO_PRAZO[p.estado];
+    if (!info || !novaData) return;
+    const { inicio, fim } = calcularPrazo20Dias(novaData);
+    updateDoc(doc(db, 'processosAmbientais', p.id), {
+      [`datas.${info.campo}`]: novaData,
+      prazo: { inicio, fim, origem: p.estado },
+    });
   };
 
   // Chegar aqui já significa que o AR foi cumprido (o fluxo só entra em
@@ -338,8 +368,19 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   // Somente o master pode mover um processo para qualquer estado, livremente.
   const moverEstadoMaster = (p) => {
     if (!estadoManualMaster || estadoManualMaster === p.estado) return;
-    moverProcesso(p, estadoManualMaster, 'manual');
+    const infoPrazo = CAMPO_DATA_POR_ESTADO_PRAZO[estadoManualMaster];
+    if (infoPrazo) {
+      // Estados de contagem automática de prazo exigem a data de início
+      // (recebimento do AR/publicação do Edital) para que o prazo de 20
+      // dias seja calculado corretamente — sem isso o processo nunca
+      // migraria sozinho para a próxima etapa.
+      if (!dataInicioPrazoMaster) return;
+      iniciarPrazo(p, infoPrazo.campo, dataInicioPrazoMaster, estadoManualMaster);
+    } else {
+      moverProcesso(p, estadoManualMaster, 'manual');
+    }
     setEstadoManualMaster('');
+    setDataInicioPrazoMaster('');
   };
 
   const toggleSelecionado = (id) => {
@@ -626,7 +667,37 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       case 'aguardando_prazo_ar':
       case 'aguardando_prazo_edital':
       case 'aguardando_prazo_notificacao_decisao':
-      case 'aguardando_prazo_recurso_edital':
+      case 'aguardando_prazo_recurso_edital': {
+        const infoPrazo = CAMPO_DATA_POR_ESTADO_PRAZO[p.estado];
+        return (
+          <div className="info-box">
+            <label>Prazo em contagem automática</label>
+            <p>Início: {p.prazo?.inicio ? new Date(p.prazo.inicio).toLocaleDateString('pt-BR') : '—'} — Fim previsto: <strong>{p.prazo?.fim ? new Date(p.prazo.fim).toLocaleDateString('pt-BR') : '—'}</strong></p>
+            <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>A migração para a próxima etapa acontece automaticamente ao final do prazo.</p>
+            {(isMaster || podeAdministrar) && (
+              editandoDataPrazo ? (
+                <div className="form-group" style={{ marginTop: '10px' }}>
+                  <label>{infoPrazo.label} (corrigir)</label>
+                  <input type="date" value={novaDataPrazo} onChange={(e) => setNovaDataPrazo(e.target.value)} />
+                  <div className="form-actions" style={{ marginTop: '8px' }}>
+                    <button className="btn-primary" disabled={!novaDataPrazo}
+                      onClick={() => pedirConfirmacao('Confirma a correção da data de início? O prazo de 20 dias será recalculado a partir dela.', () => { corrigirDataPrazo(p, novaDataPrazo); setEditandoDataPrazo(false); setNovaDataPrazo(''); })}>
+                      Salvar Correção
+                    </button>
+                    <button className="btn-secondary" onClick={() => { setEditandoDataPrazo(false); setNovaDataPrazo(''); }}>Cancelar</button>
+                  </div>
+                </div>
+              ) : (
+                <button type="button" className="link-btn" style={{ marginTop: '8px', fontSize: '12px' }}
+                  onClick={() => { setNovaDataPrazo(p.datas?.[infoPrazo.campo] || ''); setEditandoDataPrazo(true); }}>
+                  ✏️ Corrigir {infoPrazo.label.toLowerCase()}
+                </button>
+              )
+            )}
+          </div>
+        );
+      }
+
       case 'cobranca_administrativa':
         return (
           <div className="info-box">
@@ -1020,18 +1091,33 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
               <div className="form-group">
                 <label>Alterar Estado do Processo (livre)</label>
                 <div className="action-buttons">
-                  <select value={estadoManualMaster} onChange={(e) => setEstadoManualMaster(e.target.value)}
+                  <select value={estadoManualMaster} onChange={(e) => { setEstadoManualMaster(e.target.value); setDataInicioPrazoMaster(''); }}
                     style={{ flex: 1, padding: '10px 12px', border: '1px solid var(--neutral-300)', borderRadius: '8px', background: 'var(--bg-card)', color: 'var(--text-primary)' }}>
                     <option value="">Selecione um estado...</option>
                     {Object.entries(ESTADOS_AMBIENTAL).sort((a, b) => a[1].ordem - b[1].ordem).map(([id, e]) => (
                       <option key={id} value={id}>{e.label}</option>
                     ))}
                   </select>
-                  <button className="btn-secondary" disabled={!estadoManualMaster || estadoManualMaster === selected.estado}
-                    onClick={() => pedirConfirmacao(`Confirma a alteração manual do estado para "${ESTADOS_AMBIENTAL[estadoManualMaster]?.label}"?`, () => moverEstadoMaster(selected))}>
-                    Mover
-                  </button>
+                  {!CAMPO_DATA_POR_ESTADO_PRAZO[estadoManualMaster] && (
+                    <button className="btn-secondary" disabled={!estadoManualMaster || estadoManualMaster === selected.estado}
+                      onClick={() => pedirConfirmacao(`Confirma a alteração manual do estado para "${ESTADOS_AMBIENTAL[estadoManualMaster]?.label}"?`, () => moverEstadoMaster(selected))}>
+                      Mover
+                    </button>
+                  )}
                 </div>
+                {CAMPO_DATA_POR_ESTADO_PRAZO[estadoManualMaster] && (
+                  <div style={{ marginTop: '10px' }}>
+                    <label>{CAMPO_DATA_POR_ESTADO_PRAZO[estadoManualMaster].label} *</label>
+                    <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: '2px 0 6px' }}>Obrigatório — é a partir dela que o prazo de 20 dias é calculado.</p>
+                    <div className="action-buttons">
+                      <input type="date" value={dataInicioPrazoMaster} onChange={(e) => setDataInicioPrazoMaster(e.target.value)} />
+                      <button className="btn-secondary" disabled={!dataInicioPrazoMaster}
+                        onClick={() => pedirConfirmacao(`Confirma a alteração manual do estado para "${ESTADOS_AMBIENTAL[estadoManualMaster]?.label}", com início do prazo em ${new Date(dataInicioPrazoMaster + 'T12:00:00').toLocaleDateString('pt-BR')}?`, () => moverEstadoMaster(selected))}>
+                        Mover
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
               <button className="btn-delete" style={{ marginTop: '10px' }}
                 onClick={() => pedirConfirmacao(`Excluir definitivamente o processo ${selected.numeroSEI}? Esta ação não pode ser desfeita.`, () => excluirProcesso(selected))}>
