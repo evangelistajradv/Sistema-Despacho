@@ -112,6 +112,10 @@ export default function SistemaDespacho() {
   const [forgotMsg, setForgotMsg] = useState('');
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light');
   const [activeTab, setActiveTab] = useState('painel');
+  // Na aba de Processo Adm. Ambiental, a barra lateral fica oculta por
+  // padrão (a dashboard ocupa a tela toda) e aparece ao passar o mouse
+  // na borda esquerda — só nessa aba, as demais continuam normais.
+  const [sidebarAmbientalAberta, setSidebarAmbientalAberta] = useState(false);
   // Força o módulo Processo Adm. Ambiental a remontar do zero (dashboard)
   // sempre que o usuário clica na aba dele na barra lateral.
   const [ambientalResetKey, setAmbientalResetKey] = useState(0);
@@ -265,6 +269,7 @@ export default function SistemaDespacho() {
     setSelectedDeadline(null); setNewDeadlineMode(false); setShowDeadlineHistorico(false);
     setSelectedPriority(null);
     if (tabId === 'ambiental') setAmbientalResetKey((k) => k + 1);
+    setSidebarAmbientalAberta(false);
     setActiveTab(tabId);
   };
 
@@ -2527,9 +2532,18 @@ export default function SistemaDespacho() {
     );
   }
 
+  const sidebarAutohideAmbiental = activeTab === 'ambiental';
+
   return (
     <div className="app-container">
-      <aside className="sidebar">
+      {sidebarAutohideAmbiental && (
+        <div className="pa-main-sidebar-trigger" onMouseEnter={() => setSidebarAmbientalAberta(true)} aria-hidden="true" />
+      )}
+      <aside
+        className={`sidebar ${sidebarAutohideAmbiental ? `pa-main-sidebar-autohide${sidebarAmbientalAberta ? ' pa-main-sidebar-open' : ''}` : ''}`}
+        onMouseEnter={sidebarAutohideAmbiental ? () => setSidebarAmbientalAberta(true) : undefined}
+        onMouseLeave={sidebarAutohideAmbiental ? () => setSidebarAmbientalAberta(false) : undefined}
+      >
         <div className="sidebar-header">
           <button className="logo-btn" onClick={() => goToTab('painel')} title="Voltar ao início">
             <span className="logo-icon"><i className="ti ti-scale"></i></span>

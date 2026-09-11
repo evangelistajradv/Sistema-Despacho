@@ -186,6 +186,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   // Legenda do fluxo procedimental: usuários logados podem ocultar; na
   // consulta pública ela sempre aparece (sem a opção de ocultar).
   const [mostrarLegenda, setMostrarLegenda] = useState(true);
+  // Barra lateral retrátil: fica oculta à esquerda por padrão (a dashboard
+  // ocupa a tela toda) e aparece ao passar o mouse na borda esquerda.
+  const [sidebarAberta, setSidebarAberta] = useState(false);
 
   // Toda movimentação de processo passa por aqui: exibe um modal de
   // confirmação antes de executar a ação de fato.
@@ -199,6 +202,25 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     );
     return () => unsub();
   }, []);
+
+  // Atalho de teclado para abrir a autuação de um novo processo (Ctrl+Shift+N).
+  // Como o Chrome reserva Ctrl+Shift+N para "nova janela anônima" e não deixa
+  // a página interceptar essa combinação, Ctrl+Alt+N funciona como alternativa
+  // garantida em qualquer navegador.
+  useEffect(() => {
+    if (publico) return;
+    const handler = (e) => {
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || document.activeElement?.isContentEditable) return;
+      const combinacaoValida = e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'n' && (e.shiftKey || e.altKey);
+      if (combinacaoValida) {
+        e.preventDefault();
+        setView('novo');
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [publico]);
 
   const selected = processos.find((p) => p.id === selectedId) || null;
 
@@ -535,6 +557,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     .sort((a, b) => a[1].ordem - b[1].ordem);
 
   const ativos = processos.filter((p) => !p.concluido && !p.incidente?.ativo);
+  // Total de processos em tramitação — todos os estados, exceto arquivados.
+  // Exibido no topo da tela, inclusive na consulta pública.
+  const totalTramitando = processos.filter((p) => p.estado !== 'arquivado').length;
   const incidentesAtivos = processos.filter((p) => p.incidente?.ativo);
 
   const buscaDigits = onlyDigits(busca);
@@ -864,11 +889,28 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   }
 
   const conteudo = (
-    <div className="content-area">
+    <div className="content-area pa-content-area">
+      <div className="pa-topbar">
+        <button className="pa-topbar-home" onClick={() => setView('dashboard')} title="Início — voltar à Dashboard">
+          <span className="pa-topbar-icon"><i className="ti ti-leaf"></i></span>
+          <span className="pa-topbar-watermark">SEMARH · Processo Adm. Ambiental</span>
+        </button>
+        <div className="pa-topbar-right">
+          <div className="pa-topbar-stat" title="Processos em tramitação — todos os estados, exceto arquivados">
+            <span className="pa-topbar-stat-number">{totalTramitando}</span>
+            <span className="pa-topbar-stat-label">em tramitação</span>
+          </div>
+          {!publico && (
+            <button className="pa-topbar-novo" onClick={() => setView('novo')} title="Autuar Novo Processo (Ctrl+Shift+N ou Ctrl+Alt+N)">
+              <i className="ti ti-plus"></i> Novo Processo
+            </button>
+          )}
+        </div>
+      </div>
       {view === 'dashboard' && (
         <div className="list-view">
           <div className="list-header">
-            <h3>📋 Processo Administrativo Ambiental {publico && '— Consulta Pública'}{!publico && nucleoView !== 'todos' && `— Núcleo ${nucleoView === 'asstec' ? 'ASSTEC' : 'Notificações'}${somenteConsulta ? ' (consulta)' : ''}`}</h3>
+            <h3>📋 Dashboard {publico && '— Consulta Pública'}{!publico && nucleoView !== 'todos' && `— Núcleo ${nucleoView === 'asstec' ? 'ASSTEC' : 'Notificações'}${somenteConsulta ? ' (consulta)' : ''}`}</h3>
             {!publico && (
               <div className="header-buttons">
                 {podeAlternarNucleo && (
@@ -878,9 +920,6 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                 )}
                 <button className="btn-settings" onClick={() => { setEstadoFiltro(null); setView('lista'); }}>Todos os Processos</button>
                 <button className="btn-settings" onClick={abrirExportModal}>📥 Exportar Planilha</button>
-                {!somenteConsulta && (
-                  <button className="btn-new" onClick={() => setView('novo')}>+ Novo Processo</button>
-                )}
               </div>
             )}
           </div>
@@ -1355,9 +1394,29 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
 
   if (!standalone) return conteudo;
 
+  // Consulta pública: sem sidebar nenhuma — só a opção de sair, discreta,
+  // num canto da tela.
+  if (publico) {
+    return (
+      <div className="app-container">
+        <button className="pa-publico-sair" onClick={onLogout} title="Sair da consulta pública">
+          <i className="ti ti-logout"></i> Sair
+        </button>
+        <div className="main-wrapper">
+          <main className="main-content">{conteudo}</main>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app-container">
-      <aside className="sidebar">
+      <div className="pa-sidebar-trigger" onMouseEnter={() => setSidebarAberta(true)} aria-hidden="true" />
+      <aside
+        className={`sidebar pa-sidebar-autohide ${sidebarAberta ? 'pa-sidebar-open' : ''}`}
+        onMouseEnter={() => setSidebarAberta(true)}
+        onMouseLeave={() => setSidebarAberta(false)}
+      >
         <div className="sidebar-header">
           <button className="logo-btn" onClick={() => setView('dashboard')} title="Voltar ao início">
             <span className="logo-icon"><i className="ti ti-leaf"></i></span>
