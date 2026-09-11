@@ -3863,6 +3863,7 @@ button, input, select, textarea {
 }
 
 .pa-card {
+  position: relative;
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: 12px;
@@ -3872,6 +3873,16 @@ button, input, select, textarea {
   flex-direction: column;
   gap: 8px;
   transition: var(--transition);
+}
+
+.pa-card-somente-leitura {
+  cursor: default;
+}
+
+.pa-card-somente-leitura:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: var(--border-color);
 }
 
 .pa-card:hover {
@@ -3932,6 +3943,113 @@ button, input, select, textarea {
 
 .pa-card-blink-red .pa-card-new-badge {
   color: var(--accent-red, #B14C40);
+}
+
+/* Badge de setor responsável, no canto do card */
+.pa-card-sector-badge {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  background: var(--bg-hover, rgba(0,0,0,0.05));
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  padding: 3px 9px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+/* Fluxograma da dashboard: cards conectados por setas na ordem do fluxo */
+.pa-flow-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 4px;
+}
+
+.pa-flow-grid .pa-card {
+  flex: 1 1 220px;
+  max-width: 260px;
+}
+
+.pa-flow-arrow {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  color: var(--primary-main);
+  opacity: 0.45;
+  font-size: 18px;
+}
+
+@media (max-width: 900px) {
+  .pa-flow-arrow { display: none; }
+}
+
+/* Legenda do fluxo procedimental, ao final da dashboard */
+.pa-legend-section {
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px dashed var(--border-color);
+}
+
+.pa-legend-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.pa-legend-header h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.pa-legend-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.pa-legend-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.pa-legend-number {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--primary-main);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pa-legend-text strong {
+  display: block;
+  font-size: 12.5px;
+  color: var(--text-primary);
+  margin-bottom: 3px;
+}
+
+.pa-legend-text p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
 }
 
 .card-item-alerta {

@@ -32,6 +32,14 @@ service cloud.firestore {
       allow create: if request.auth != null;
       allow update, delete: if request.auth != null && request.auth.token.email != null;
     }
+    // Processo Administrativo Ambiental: a Consulta Pública da tela de login
+    // só exibe a dashboard agregada (contagens por estado), mas a leitura é
+    // liberada para a sessão anônima (mesmo padrão do DOE/PI). Criar, editar
+    // e apagar processos continua exigindo login real.
+    match /processosAmbientais/{docId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.token.email != null;
+    }
     // Todo o resto (processos, acompanhamentos, audiencias, prazos,
     // pushSubscriptions...) exige login real do usuário.
     match /{document=**} {

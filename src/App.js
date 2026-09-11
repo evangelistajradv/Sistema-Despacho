@@ -82,6 +82,11 @@ export default function SistemaDespacho() {
   const [publicPrioritySuccess, setPublicPrioritySuccess] = useState(false);
   const [publicPriorityError, setPublicPriorityError] = useState('');
   const [publicPriorityLoading, setPublicPriorityLoading] = useState(false);
+  // Consulta Pública à Dashboard do Processo Adm. Ambiental (login anônimo,
+  // só a dashboard agregada — análoga à Consulta ao DOE/PI)
+  const [publicAmbientalMode, setPublicAmbientalMode] = useState(false);
+  const [publicAmbientalError, setPublicAmbientalError] = useState('');
+  const [publicAmbientalLoading, setPublicAmbientalLoading] = useState(false);
   const [loginUser, setLoginUser] = useState('master');
   const [loginPass, setLoginPass] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
@@ -1366,6 +1371,26 @@ export default function SistemaDespacho() {
     setPublicPriorityError('');
   };
 
+  // ─── Consulta Pública à Dashboard do Processo Adm. Ambiental ────────────
+  const handlePublicAmbientalAccess = async () => {
+    setPublicAmbientalError('');
+    setPublicAmbientalLoading(true);
+    try {
+      await signInAnonymously(auth);
+      setPublicAmbientalMode(true);
+    } catch (e) {
+      console.error('❌ Erro ao acessar consulta pública ambiental:', e.message);
+      setPublicAmbientalError('Não foi possível abrir a consulta pública agora. Tente novamente em instantes.');
+    } finally {
+      setPublicAmbientalLoading(false);
+    }
+  };
+
+  const handleExitPublicAmbiental = () => {
+    signOut(auth).catch(() => {});
+    setPublicAmbientalMode(false);
+  };
+
   const submitPublicPriority = async (e) => {
     e.preventDefault();
     setPublicPriorityError('');
@@ -2361,6 +2386,19 @@ export default function SistemaDespacho() {
       </div>
     );
   }
+
+  if (publicAmbientalMode) {
+    return (
+      <ProcessoAmbiental
+        publicoSomenteDashboard
+        standalone
+        theme={theme}
+        setTheme={setTheme}
+        onLogout={handleExitPublicAmbiental}
+      />
+    );
+  }
+
   if (!authenticated) {
     if (!authChecked || !configLoaded) {
       // Evita o "flash" da tela errada enquanto o Firebase confere se já existe
@@ -2461,6 +2499,10 @@ export default function SistemaDespacho() {
             <i className="ti ti-star"></i> {publicPriorityLoading ? 'Abrindo...' : 'Pedido de Prioridade na Tramitação de Processos SEI'}
           </button>
           {publicPriorityError && !publicPriorityMode && <p className="login-footer" style={{color:'var(--accent-red)'}}>{publicPriorityError}</p>}
+          <button type="button" className="link-btn" style={{width:'100%', justifyContent:'center', marginTop:'10px'}} onClick={handlePublicAmbientalAccess} disabled={publicAmbientalLoading}>
+            <i className="ti ti-leaf"></i> {publicAmbientalLoading ? 'Abrindo...' : 'Consulta Pública — Dashboard Processo Adm. Ambiental'}
+          </button>
+          {publicAmbientalError && <p className="login-footer" style={{color:'var(--accent-red)'}}>{publicAmbientalError}</p>}
         </form>
       </div>
     );

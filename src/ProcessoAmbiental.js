@@ -23,6 +23,7 @@ const ESTADOS_AMBIENTAL = {
   aguardando_saneamento:                { label: 'Aguardando Saneamento/Julgamento',                     nucleo: 'asstec',       ordem: 7 },
   pendente_diligencia:                  { label: 'Pendente de Diligência',                                nucleo: 'notificacoes', ordem: 8 },
   aguardando_analise_minuta_gabinete:   { label: 'Aguardando Análise de Minuta pelo Gabinete',           nucleo: 'asstec',       ordem: 8.5 },
+  triagem_despacho_notificacao_decisao: { label: 'Triagem de Despacho/Notificação após Decisão',         nucleo: 'asstec',       ordem: 8.7 },
   pendente_notificacao_decisao:         { label: 'Pendente de Notificação de Decisão (AR/Email/WPP)',    nucleo: 'notificacoes', ordem: 9 },
   aguardando_prazo_notificacao_decisao: { label: 'Aguardando Decurso de Prazo de Notificação',           nucleo: 'notificacoes', ordem: 10, auto: true },
   pendente_certificacao_decisao:        { label: 'Pendente de Certificação',                             nucleo: 'notificacoes', ordem: 10.1, certificacao: true },
@@ -34,6 +35,17 @@ const ESTADOS_AMBIENTAL = {
   pendente_envio_pge:                   { label: 'Pendente de Envio para PGE',                            nucleo: 'asstec',       ordem: 15 },
   arquivado:                            { label: 'Processos Arquivados',                                 nucleo: 'ambos',        ordem: 16 },
 };
+
+// Legenda explicativa do fluxo procedimental, exibida ao final da dashboard —
+// resume as grandes fases do processo para quem não acompanha o dia a dia.
+const LEGENDA_FLUXO = [
+  { titulo: 'Aguardando Triagem', descricao: 'Processo autuado no SEI.' },
+  { titulo: 'Pendente de Notificação / Pendente de Certificação (1)', descricao: 'Notificação expedida! Aguardando defesa do interessado.' },
+  { titulo: 'Aguardando Saneamento/Diligência', descricao: 'Processo será julgado ou encaminhado ao setor técnico para esclarecimentos.' },
+  { titulo: 'Aguardando Análise de Minuta', descricao: 'Minuta de decisão na mesa do secretário.' },
+  { titulo: 'Triagem de Despacho / Pendente de Certificação (2)', descricao: 'Aguardando prazo para recurso.' },
+  { titulo: 'Pendente de Despacho/Remessa CONSEMA', descricao: 'Processo seguirá para o CONSEMA, em caso de recurso ou para cobrança, ou para arquivamento, no caso de improcedência.' },
+];
 
 // Migração automática ao final do prazo (aplicada pelo verificador periódico)
 const PROXIMO_AUTOMATICO = {
@@ -124,7 +136,10 @@ function parseMoeda(str) {
   return parseFloat(s) || 0;
 }
 
-export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbiental, isMaster, podeAdministrar, theme, setTheme, onLogout, standalone }) {
+export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbiental, isMaster, podeAdministrar, theme, setTheme, onLogout, standalone, publicoSomenteDashboard }) {
+  // Consulta pública: só a dashboard agregada (contagens por estado), sem
+  // acesso a processos individuais nem a nenhuma ação de movimentação.
+  const publico = !!publicoSomenteDashboard;
   // O núcleo real do usuário é sempre o setor a que pertence (nucleoAmbiental),
   // inclusive para o master — isso define a visão padrão da dashboard. O
   // master (isMaster) mantém poderes administrativos plenos independente
@@ -165,6 +180,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   // (master ou "Admin. Ambiental Total"): 'todos' | 'asstec' | 'notificacoes'.
   // null = ainda não escolheu, usa o próprio setor como padrão.
   const [dashboardView, setDashboardView] = useState(null);
+  // Legenda do fluxo procedimental: usuários logados podem ocultar; na
+  // consulta pública ela sempre aparece (sem a opção de ocultar).
+  const [mostrarLegenda, setMostrarLegenda] = useState(true);
 
   // Toda movimentação de processo passa por aqui: exibe um modal de
   // confirmação antes de executar a ação de fato.
@@ -207,6 +225,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
 
   // Verificação periódica de prazos automáticos (dispara migração ao vencer)
   useEffect(() => {
+    if (publico) return; // consulta pública é só leitura, nunca movimenta processos
     const checar = () => {
       const agora = new Date();
       processos.forEach((p) => {
@@ -222,7 +241,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     const interval = setInterval(checar, 60 * 60 * 1000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [processos]);
+  }, [processos, publico]);
 
   const iniciarPrazo = (p, campoData, valor, estadoDestino) => {
     const { inicio, fim } = calcularPrazo20Dias(valor);
@@ -423,19 +442,21 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   // Master e quem tem "Admin. Ambiental Total" podem alternar livremente
   // entre Visão Total, ASSTEC e Notificações — por padrão, veem o setor a
   // que pertencem (meuNucleo), não a Visão Total.
-  const podeAlternarVisaoTotal = isMaster || podeAdministrar;
-  const nucleoView = podeAlternarVisaoTotal
-    ? (dashboardView || meuNucleo || 'todos')
-    : (consultaOutroNucleo ? (meuNucleo === 'asstec' ? 'notificacoes' : 'asstec') : meuNucleo);
-  const somenteConsulta = !podeAlternarVisaoTotal && consultaOutroNucleo;
-  const podeAlternarNucleo = !podeAlternarVisaoTotal && meuNucleo === 'asstec'; // só ASSTEC "comum" tem a toggle simples (Notificações não acessa o outro lado)
+  const podeAlternarVisaoTotal = !publico && (isMaster || podeAdministrar);
+  const nucleoView = publico
+    ? 'todos'
+    : podeAlternarVisaoTotal
+      ? (dashboardView || meuNucleo || 'todos')
+      : (consultaOutroNucleo ? (meuNucleo === 'asstec' ? 'notificacoes' : 'asstec') : meuNucleo);
+  const somenteConsulta = publico || (!podeAlternarVisaoTotal && consultaOutroNucleo);
+  const podeAlternarNucleo = !publico && !podeAlternarVisaoTotal && meuNucleo === 'asstec'; // só ASSTEC "comum" tem a toggle simples (Notificações não acessa o outro lado)
 
   // Na DASHBOARD, cada núcleo só vê as classes que ele efetivamente movimenta
   // (estados com contagem automática de prazo — sem nenhuma ação manual — ficam
   // de fora dos cards; continuam visíveis em "Todos os Processos"). O master
   // vê tudo, inclusive as contagens automáticas, para ter visão completa.
   const estadosVisiveis = Object.entries(ESTADOS_AMBIENTAL)
-    .filter(([, e]) => (isMaster || podeAdministrar || !e.auto) && (nucleoView === 'todos' || e.nucleo === nucleoView || e.nucleo === 'ambos'))
+    .filter(([, e]) => (isMaster || podeAdministrar || publico || !e.auto) && (nucleoView === 'todos' || e.nucleo === nucleoView || e.nucleo === 'ambos'))
     .sort((a, b) => a[1].ordem - b[1].ordem);
 
   const ativos = processos.filter((p) => !p.concluido && !p.incidente?.ativo);
@@ -647,7 +668,10 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
         );
 
       case 'aguardando_analise_minuta_gabinete':
-        return <button className="btn-primary" onClick={() => pedirConfirmacao('Confirma que a minuta foi analisada pelo Gabinete? O processo seguirá para Notificação de Decisão.', () => moverProcesso(p, 'pendente_notificacao_decisao'))}>Minuta Analisada → Notificar Decisão</button>;
+        return <button className="btn-primary" onClick={() => pedirConfirmacao('Confirma que a minuta foi analisada pelo Gabinete? O processo seguirá para triagem de despacho/notificação.', () => moverProcesso(p, 'triagem_despacho_notificacao_decisao'))}>Minuta Analisada → Triagem de Despacho</button>;
+
+      case 'triagem_despacho_notificacao_decisao':
+        return <button className="btn-primary" onClick={() => pedirConfirmacao('Confirma que a notificação foi confeccionada? O processo seguirá para Notificação de Decisão.', () => moverProcesso(p, 'pendente_notificacao_decisao'))}>Notificação Confeccionada</button>;
 
       case 'pendente_diligencia': {
         const dias = diasNoEstado(p.entradaNoEstadoEm);
@@ -714,7 +738,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   };
 
   // ─── Render: usuário do Núcleo de Notificações sem núcleo/master ──
-  if (!meuNucleo && !isMaster) {
+  if (!publico && !meuNucleo && !isMaster) {
     return <div className="empty-state" style={{ padding: '3rem' }}>Você não tem acesso a este módulo. Fale com o administrador.</div>;
   }
 
@@ -723,19 +747,21 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       {view === 'dashboard' && (
         <div className="list-view">
           <div className="list-header">
-            <h3>📋 Processo Administrativo Ambiental {nucleoView !== 'todos' && `— Núcleo ${nucleoView === 'asstec' ? 'ASSTEC' : 'Notificações'}${somenteConsulta ? ' (consulta)' : ''}`}</h3>
-            <div className="header-buttons">
-              {podeAlternarNucleo && (
-                <button className="btn-settings" onClick={() => setConsultaOutroNucleo((v) => !v)}>
-                  {consultaOutroNucleo ? '↩ Ver Minha Dashboard' : '👁 Ver Núcleo de Notificações'}
-                </button>
-              )}
-              <button className="btn-settings" onClick={() => { setEstadoFiltro(null); setView('lista'); }}>Todos os Processos</button>
-              <button className="btn-settings" onClick={abrirExportModal}>📥 Exportar Planilha</button>
-              {!somenteConsulta && (
-                <button className="btn-new" onClick={() => setView('novo')}>+ Novo Processo</button>
-              )}
-            </div>
+            <h3>📋 Processo Administrativo Ambiental {publico && '— Consulta Pública'}{!publico && nucleoView !== 'todos' && `— Núcleo ${nucleoView === 'asstec' ? 'ASSTEC' : 'Notificações'}${somenteConsulta ? ' (consulta)' : ''}`}</h3>
+            {!publico && (
+              <div className="header-buttons">
+                {podeAlternarNucleo && (
+                  <button className="btn-settings" onClick={() => setConsultaOutroNucleo((v) => !v)}>
+                    {consultaOutroNucleo ? '↩ Ver Minha Dashboard' : '👁 Ver Núcleo de Notificações'}
+                  </button>
+                )}
+                <button className="btn-settings" onClick={() => { setEstadoFiltro(null); setView('lista'); }}>Todos os Processos</button>
+                <button className="btn-settings" onClick={abrirExportModal}>📥 Exportar Planilha</button>
+                {!somenteConsulta && (
+                  <button className="btn-new" onClick={() => setView('novo')}>+ Novo Processo</button>
+                )}
+              </div>
+            )}
           </div>
 
           {podeAlternarVisaoTotal && (
@@ -746,7 +772,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             </div>
           )}
 
-          {incidentesAtivos.length > 0 && (nucleoView === 'todos' || nucleoView === 'asstec') && (
+          {!publico && incidentesAtivos.length > 0 && (nucleoView === 'todos' || nucleoView === 'asstec') && (
             <div className="pa-dash-grid" style={{ marginBottom: '18px' }}>
               <div className="pa-card pa-card-incident" onClick={() => { setEstadoFiltro('__incidente__'); setView('lista'); }}>
                 <span className="pa-card-count">{incidentesAtivos.length}</span>
@@ -755,20 +781,55 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             </div>
           )}
 
-          <div className="pa-dash-grid">
-            {estadosVisiveis.map(([id, est]) => {
-              const novos = naoVistos(id).length;
-              const arAtrasado = temARAtrasado(id);
+          <div className="pa-flow-grid">
+            {estadosVisiveis.map(([id, est], idx) => {
+              const novos = publico ? 0 : naoVistos(id).length;
+              const arAtrasado = publico ? false : temARAtrasado(id);
               const classeBlink = arAtrasado ? 'pa-card-blink-red' : (novos > 0 ? 'pa-card-blink' : '');
+              const setorLabel = est.nucleo === 'asstec' ? 'ASSTEC' : est.nucleo === 'notificacoes' ? 'Núcleo de Notificação' : null;
               return (
-              <div key={id} className={`pa-card ${classeBlink}`} onClick={() => abrirGrupo(id)}>
-                <span className="pa-card-count">{contarEstado(id).length}</span>
-                <span className="pa-card-label">{est.label}</span>
-                {novos > 0 && <span className="pa-card-new-badge">{novos} novo{novos === 1 ? '' : 's'} processo{novos === 1 ? '' : 's'}</span>}
-              </div>
+                <React.Fragment key={id}>
+                  <div
+                    className={`pa-card ${classeBlink}${publico ? ' pa-card-somente-leitura' : ''}`}
+                    onClick={publico ? undefined : () => abrirGrupo(id)}
+                  >
+                    {setorLabel && <span className="pa-card-sector-badge">{setorLabel}</span>}
+                    <span className="pa-card-count">{contarEstado(id).length}</span>
+                    <span className="pa-card-label">{est.label}</span>
+                    {novos > 0 && <span className="pa-card-new-badge">{novos} novo{novos === 1 ? '' : 's'} processo{novos === 1 ? '' : 's'}</span>}
+                  </div>
+                  {idx < estadosVisiveis.length - 1 && (
+                    <div className="pa-flow-arrow" aria-hidden="true"><i className="ti ti-arrow-narrow-right"></i></div>
+                  )}
+                </React.Fragment>
               );
             })}
           </div>
+
+          {(mostrarLegenda || publico) && (
+            <div className="pa-legend-section">
+              <div className="pa-legend-header">
+                <h4>📖 Legenda do Fluxo Procedimental</h4>
+                {!publico && (
+                  <button type="button" className="link-btn" onClick={() => setMostrarLegenda(false)}>Ocultar legendas</button>
+                )}
+              </div>
+              <div className="pa-legend-grid">
+                {LEGENDA_FLUXO.map((item, i) => (
+                  <div className="pa-legend-item" key={i}>
+                    <span className="pa-legend-number">{i + 1}</span>
+                    <div className="pa-legend-text">
+                      <strong>{item.titulo}</strong>
+                      <p>{item.descricao}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {!mostrarLegenda && !publico && (
+            <button type="button" className="link-btn" style={{ marginTop: '14px' }} onClick={() => setMostrarLegenda(true)}>Mostrar legendas</button>
+          )}
         </div>
       )}
 
@@ -1120,14 +1181,16 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           <button className={`nav-item ${view === 'dashboard' ? 'active' : ''}`} onClick={() => setView('dashboard')}>
             <span className="icon"><i className="ti ti-layout-dashboard"></i></span><span className="label">Dashboard</span>
           </button>
-          <button className={`nav-item ${view === 'lista' && !estadoFiltro ? 'active' : ''}`} onClick={() => { setEstadoFiltro(null); setView('lista'); }}>
-            <span className="icon"><i className="ti ti-list"></i></span><span className="label">Todos os Processos</span>
-          </button>
+          {!publico && (
+            <button className={`nav-item ${view === 'lista' && !estadoFiltro ? 'active' : ''}`} onClick={() => { setEstadoFiltro(null); setView('lista'); }}>
+              <span className="icon"><i className="ti ti-list"></i></span><span className="label">Todos os Processos</span>
+            </button>
+          )}
         </nav>
         <div className="sidebar-footer">
-          <div className="user-info" data-initial={(nomeUsuario || '?').charAt(0).toUpperCase()}>
-            <p className="user-name">{nomeUsuario}</p>
-            <p className="user-role">Núcleo de Notificações</p>
+          <div className="user-info" data-initial={publico ? 'V' : (nomeUsuario || '?').charAt(0).toUpperCase()}>
+            <p className="user-name">{publico ? 'Visitante' : nomeUsuario}</p>
+            <p className="user-role">{publico ? 'Consulta pública' : 'Núcleo de Notificações'}</p>
           </div>
           <div className="sidebar-actions">
             <button className="btn-icon" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title="Alternar tema"><i className={`ti ${theme === 'light' ? 'ti-moon' : 'ti-sun'}`}></i></button>
