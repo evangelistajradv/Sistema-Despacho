@@ -483,7 +483,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       criadoEm: new Date().toISOString(), criadoPor: currentUser,
     });
     setNovo({ numeroSEI: '', parte: '', valorMulta: '', autoInfracao: '', termoSancao: '', enderecos: [], descricaoInfracao: '' });
-    setNovoEnderecoForm('');
+    setNovoEndereco({ logradouro: '', numero: '', bairro: '', cep: '', cidade: '', uf: '', complemento: '' });
     setEstadoNovoProcesso('');
     setDataInicioPrazoMaster('');
     const msgEstado = estadoInicial === 'triagem' ? 'Remetido à ASSTEC para triagem inicial.' : `Autuado diretamente em "${ESTADOS_AMBIENTAL[estadoInicial]?.label}".`;
