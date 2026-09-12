@@ -157,7 +157,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const [mostrarConcluidos, setMostrarConcluidos] = useState(false);
   const [novo, setNovo] = useState({ numeroSEI: '', parte: '', valorMulta: '', autoInfracao: '', termoSancao: '', enderecos: [], descricaoInfracao: '' });
   const [dataInput, setDataInput] = useState('');
-  const [novoEnderecoForm, setNovoEnderecoForm] = useState('');
+  const [novoEndereco, setNovoEndereco] = useState({ logradouro: '', numero: '', bairro: '', cep: '', cidade: '', uf: '', complemento: '' });
   const [showIncidenteModal, setShowIncidenteModal] = useState(false);
   const [incidenteForm, setIncidenteForm] = useState({ tipo: 'TAC', observacao: '', considerarCumprido: true });
   const [showResolverIncidente, setShowResolverIncidente] = useState(false);
@@ -1044,18 +1044,60 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             <input type="text" placeholder="Ex: TS-2026-123" value={novo.termoSancao} onChange={(e) => setNovo({ ...novo, termoSancao: e.target.value })} />
           </div>
 
-          <div className="form-group"><label>Endereço(s)</label>
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
-              <input type="text" placeholder="Digite o endereço..." value={novoEnderecoForm} onChange={(e) => setNovoEnderecoForm(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && novoEnderecoForm.trim()) { setNovo({ ...novo, enderecos: [...novo.enderecos, novoEnderecoForm.trim()] }); setNovoEnderecoForm(''); } }} />
-              <button type="button" className="btn-secondary" style={{ padding: '10px 14px' }} onClick={() => { if (novoEnderecoForm.trim()) { setNovo({ ...novo, enderecos: [...novo.enderecos, novoEnderecoForm.trim()] }); setNovoEnderecoForm(''); } }}>+</button>
+          <div className="form-group" style={{ border: '1px solid var(--neutral-200)', padding: '12px', borderRadius: '8px', background: 'var(--bg-card)' }}>
+            <label style={{ marginBottom: '12px', display: 'block', fontWeight: '500' }}>Endereço(s)</label>
+
+            <div className="form-grid" style={{ gridTemplateColumns: '2fr 1fr', gap: '10px', marginBottom: '10px' }}>
+              <div><label style={{ fontSize: '12px' }}>Logradouro *</label>
+                <input type="text" placeholder="Rua, Avenida, etc." value={novoEndereco.logradouro} onChange={(e) => setNovoEndereco({ ...novoEndereco, logradouro: e.target.value })} style={{ width: '100%' }} />
+              </div>
+              <div><label style={{ fontSize: '12px' }}>Número</label>
+                <input type="text" placeholder="Ex: 123" value={novoEndereco.numero} onChange={(e) => setNovoEndereco({ ...novoEndereco, numero: e.target.value })} style={{ width: '100%' }} />
+              </div>
             </div>
+
+            <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
+              <div><label style={{ fontSize: '12px' }}>Bairro *</label>
+                <input type="text" placeholder="Bairro" value={novoEndereco.bairro} onChange={(e) => setNovoEndereco({ ...novoEndereco, bairro: e.target.value })} style={{ width: '100%' }} />
+              </div>
+              <div><label style={{ fontSize: '12px' }}>CEP</label>
+                <input type="text" placeholder="00000-000" value={novoEndereco.cep} onChange={(e) => setNovoEndereco({ ...novoEndereco, cep: e.target.value })} style={{ width: '100%' }} />
+              </div>
+            </div>
+
+            <div className="form-grid" style={{ gridTemplateColumns: '2fr 1fr', gap: '10px', marginBottom: '10px' }}>
+              <div><label style={{ fontSize: '12px' }}>Cidade *</label>
+                <input type="text" placeholder="Cidade" value={novoEndereco.cidade} onChange={(e) => setNovoEndereco({ ...novoEndereco, cidade: e.target.value })} style={{ width: '100%' }} />
+              </div>
+              <div><label style={{ fontSize: '12px' }}>UF *</label>
+                <input type="text" placeholder="BA" maxLength="2" value={novoEndereco.uf} onChange={(e) => setNovoEndereco({ ...novoEndereco, uf: e.target.value.toUpperCase() })} style={{ width: '100%' }} />
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '10px' }}>
+              <label style={{ fontSize: '12px' }}>Complemento</label>
+              <input type="text" placeholder="Apto, sala, etc." value={novoEndereco.complemento} onChange={(e) => setNovoEndereco({ ...novoEndereco, complemento: e.target.value })} style={{ width: '100%' }} />
+            </div>
+
+            <button type="button" className="btn-primary" style={{ width: '100%', marginBottom: '10px' }} onClick={() => {
+              const numero = novoEndereco.numero.trim() || (novoEndereco.logradouro.trim() && novoEndereco.bairro.trim() && novoEndereco.cidade.trim() && novoEndereco.uf.trim() ? 'S/N' : '');
+              if (novoEndereco.logradouro.trim() && novoEndereco.bairro.trim() && novoEndereco.cidade.trim() && novoEndereco.uf.trim()) {
+                const enderecoCompleto = { ...novoEndereco, numero: numero };
+                setNovo({ ...novo, enderecos: [...novo.enderecos, enderecoCompleto] });
+                setNovoEndereco({ logradouro: '', numero: '', bairro: '', cep: '', cidade: '', uf: '', complemento: '' });
+              } else {
+                alert('Preencha: Logradouro, Bairro, Cidade e UF');
+              }
+            }}>+ Adicionar Endereço</button>
+
             {novo.enderecos.length > 0 && (
-              <div style={{ marginTop: '8px' }}>
+              <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--neutral-200)' }}>
                 {novo.enderecos.map((end, idx) => (
-                  <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 10px', background: 'var(--neutral-100)', borderRadius: '4px', marginBottom: '4px', fontSize: '13px' }}>
-                    <span>{end}</span>
-                    <button type="button" className="link-btn" style={{ color: 'var(--red)' }} onClick={() => setNovo({ ...novo, enderecos: novo.enderecos.filter((_, i) => i !== idx) })}>✕</button>
+                  <div key={idx} style={{ padding: '8px', background: 'var(--neutral-100)', borderRadius: '4px', marginBottom: '6px', fontSize: '12px' }}>
+                    <div><strong>{end.logradouro}, {end.numero}</strong></div>
+                    <div>{end.complemento && `${end.complemento} - `}{end.bairro}</div>
+                    <div>{end.cidade}, {end.uf} {end.cep && `- ${end.cep}`}</div>
+                    <button type="button" className="link-btn" style={{ color: 'var(--red)', fontSize: '11px', marginTop: '4px' }} onClick={() => setNovo({ ...novo, enderecos: novo.enderecos.filter((_, i) => i !== idx) })}>✕ Remover</button>
                   </div>
                 ))}
               </div>
