@@ -1,0 +1,47 @@
+name: 🔄 Backup Diário do Firestore
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 📥 Clonar repositório
+        uses: actions/checkout@v3
+
+      - name: 📦 Configurar Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: 📚 Instalar dependências
+        run: |
+          npm ci
+
+      - name: 💾 Executar backup
+        env:
+          FIREBASE_CREDENTIALS: ${{ secrets.FIREBASE_CREDENTIALS }}
+        run: |
+          node scripts/backup-firestore.js || exit 0
+
+      - name: 🗂️  Rotacionar backups antigos
+        run: |
+          node scripts/rotate-backups.js || exit 0
+
+      - name: 📤 Commitir backups
+        run: |
+          git config user.name "Backup Bot"
+          git config user.email "backup@sistema-despacho.local"
+
+          if [ -n "$(git status --porcelain backups/)" ]; then
+            git add backups/
+            git commit -m "🔄 Backup automático - $(date '+%Y-%m-%d %H:%M:%S')"
+            git push
+          else
+            echo "✓ Sem mudanças para commitar"
+          fi

@@ -155,7 +155,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const [ordem, setOrdem] = useState('antigo'); // antigo | recente
   const [nucleoFiltro, setNucleoFiltro] = useState('todos');
   const [mostrarConcluidos, setMostrarConcluidos] = useState(false);
-  const [novo, setNovo] = useState({ numeroSEI: '', parte: '', valorMulta: '', autoInfracao: '', termoEmbargo: '', enderecos: [], descricaoInfracao: '' });
+  const [novo, setNovo] = useState({ numeroSEI: '', parte: '', valorMulta: '', autoInfracao: '', termoSancao: '', enderecos: [], descricaoInfracao: '' });
   const [dataInput, setDataInput] = useState('');
   const [novoEnderecoForm, setNovoEnderecoForm] = useState('');
   const [showIncidenteModal, setShowIncidenteModal] = useState(false);
@@ -472,7 +472,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       parte: novo.parte.trim(),
       valorMulta: parseMoeda(novo.valorMulta),
       autoInfracao: novo.autoInfracao.trim(),
-      termoEmbargo: novo.termoEmbargo.trim(),
+      termoSancao: novo.termoSancao.trim(),
       enderecos: novo.enderecos,
       descricaoInfracao: novo.descricaoInfracao.trim(),
       estado: estadoInicial,
@@ -483,7 +483,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       ...(prazoInicial ? { prazo: prazoInicial } : {}),
       criadoEm: new Date().toISOString(), criadoPor: currentUser,
     });
-    setNovo({ numeroSEI: '', parte: '', valorMulta: '', autoInfracao: '', termoEmbargo: '', enderecos: [], descricaoInfracao: '' });
+    setNovo({ numeroSEI: '', parte: '', valorMulta: '', autoInfracao: '', termoSancao: '', enderecos: [], descricaoInfracao: '' });
     setNovoEnderecoForm('');
     setEstadoNovoProcesso('');
     setDataInicioPrazoMaster('');
@@ -1040,8 +1040,8 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             <input type="text" placeholder="Ex: 001/2026" value={novo.autoInfracao} onChange={(e) => setNovo({ ...novo, autoInfracao: e.target.value })} />
           </div>
 
-          <div className="form-group"><label>Termo de Embargo</label>
-            <input type="text" placeholder="Ex: TE-2026-123" value={novo.termoEmbargo} onChange={(e) => setNovo({ ...novo, termoEmbargo: e.target.value })} />
+          <div className="form-group"><label>Termo de Sanção</label>
+            <input type="text" placeholder="Ex: TS-2026-123" value={novo.termoSancao} onChange={(e) => setNovo({ ...novo, termoSancao: e.target.value })} />
           </div>
 
           <div className="form-group"><label>Endereço(s)</label>

@@ -1,0 +1,47 @@
+name: 📸 Snapshot em Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      label:
+        description: 'Label do snapshot'
+        required: true
+        default: 'snapshot'
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 📥 Clonar repositório
+        uses: actions/checkout@v3
+
+      - name: 📦 Configurar Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: 📚 Instalar dependências
+        run: |
+          npm ci
+
+      - name: 📸 Criar snapshot
+        env:
+          FIREBASE_CREDENTIALS: ${{ secrets.FIREBASE_CREDENTIALS }}
+          SNAPSHOT_LABEL: ${{ github.event.release.tag_name || github.event.inputs.label }}
+        run: |
+          node scripts/create-snapshot.js --label "$SNAPSHOT_LABEL" || exit 0
+
+      - name: 📤 Commitir snapshot
+        run: |
+          git config user.name "Backup Bot"
+          git config user.email "backup@sistema-despacho.local"
+
+          if [ -n "$(git status --porcelain backups/snapshots/)" ]; then
+            git add backups/snapshots/
+            git commit -m "📸 Snapshot: ${{ github.event.release.tag_name || github.event.inputs.label }}"
+            git push
+          fi
