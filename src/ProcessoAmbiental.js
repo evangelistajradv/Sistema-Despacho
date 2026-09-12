@@ -1079,7 +1079,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
               <input type="text" placeholder="Apto, sala, etc." value={novoEndereco.complemento} onChange={(e) => setNovoEndereco({ ...novoEndereco, complemento: e.target.value })} style={{ width: '100%' }} />
             </div>
 
-            <button type="button" className="btn-primary" style={{ width: '100%', marginBottom: '10px' }} onClick={() => {
+            <button type="button" className="btn-secondary" style={{ padding: '8px 12px', fontSize: '12px' }} onClick={() => {
               const numero = novoEndereco.numero.trim() || (novoEndereco.logradouro.trim() && novoEndereco.bairro.trim() && novoEndereco.cidade.trim() && novoEndereco.uf.trim() ? 'S/N' : '');
               if (novoEndereco.logradouro.trim() && novoEndereco.bairro.trim() && novoEndereco.cidade.trim() && novoEndereco.uf.trim()) {
                 const enderecoCompleto = { ...novoEndereco, numero: numero };
@@ -1088,7 +1088,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
               } else {
                 alert('Preencha: Logradouro, Bairro, Cidade e UF');
               }
-            }}>+ Adicionar Endereço</button>
+            }}>+ Endereço</button>
 
             {novo.enderecos.length > 0 && (
               <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--neutral-200)' }}>
