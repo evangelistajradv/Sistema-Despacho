@@ -155,8 +155,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const [ordem, setOrdem] = useState('antigo'); // antigo | recente
   const [nucleoFiltro, setNucleoFiltro] = useState('todos');
   const [mostrarConcluidos, setMostrarConcluidos] = useState(false);
-  const [novo, setNovo] = useState({ numeroSEI: '', parte: '', valorMulta: '' });
+  const [novo, setNovo] = useState({ numeroSEI: '', parte: '', valorMulta: '', autoInfracao: '', termoEmbargo: '', enderecos: [], descricaoInfracao: '' });
   const [dataInput, setDataInput] = useState('');
+  const [novoEnderecoForm, setNovoEnderecoForm] = useState('');
   const [showIncidenteModal, setShowIncidenteModal] = useState(false);
   const [incidenteForm, setIncidenteForm] = useState({ tipo: 'TAC', observacao: '', considerarCumprido: true });
   const [showResolverIncidente, setShowResolverIncidente] = useState(false);
@@ -470,6 +471,10 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       numeroSEIDigits: onlyDigits(numeroSEITrim),
       parte: novo.parte.trim(),
       valorMulta: parseMoeda(novo.valorMulta),
+      autoInfracao: novo.autoInfracao.trim(),
+      termoEmbargo: novo.termoEmbargo.trim(),
+      enderecos: novo.enderecos,
+      descricaoInfracao: novo.descricaoInfracao.trim(),
       estado: estadoInicial,
       dataAutuacao: new Date().toISOString().slice(0, 10),
       entradaNoEstadoEm: new Date().toISOString(),
@@ -478,7 +483,8 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       ...(prazoInicial ? { prazo: prazoInicial } : {}),
       criadoEm: new Date().toISOString(), criadoPor: currentUser,
     });
-    setNovo({ numeroSEI: '', parte: '', valorMulta: '' });
+    setNovo({ numeroSEI: '', parte: '', valorMulta: '', autoInfracao: '', termoEmbargo: '', enderecos: [], descricaoInfracao: '' });
+    setNovoEnderecoForm('');
     setEstadoNovoProcesso('');
     setDataInicioPrazoMaster('');
     const msgEstado = estadoInicial === 'triagem' ? 'Remetido à ASSTEC para triagem inicial.' : `Autuado diretamente em "${ESTADOS_AMBIENTAL[estadoInicial]?.label}".`;
@@ -1026,6 +1032,40 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
               <input type="date" value={dataInicioPrazoMaster} onChange={(e) => setDataInicioPrazoMaster(e.target.value)} />
             </div>
           )}
+
+          <hr style={{ margin: '20px 0', border: '1px solid var(--neutral-200)' }} />
+          <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: '0 0 14px' }}>📋 Informações Adicionais (opcionais)</p>
+
+          <div className="form-group"><label>Auto de Infração</label>
+            <input type="text" placeholder="Ex: 001/2026" value={novo.autoInfracao} onChange={(e) => setNovo({ ...novo, autoInfracao: e.target.value })} />
+          </div>
+
+          <div className="form-group"><label>Termo de Embargo</label>
+            <input type="text" placeholder="Ex: TE-2026-123" value={novo.termoEmbargo} onChange={(e) => setNovo({ ...novo, termoEmbargo: e.target.value })} />
+          </div>
+
+          <div className="form-group"><label>Endereço(s)</label>
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+              <input type="text" placeholder="Digite o endereço..." value={novoEnderecoForm} onChange={(e) => setNovoEnderecoForm(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && novoEnderecoForm.trim()) { setNovo({ ...novo, enderecos: [...novo.enderecos, novoEnderecoForm.trim()] }); setNovoEnderecoForm(''); } }} />
+              <button type="button" className="btn-secondary" style={{ padding: '10px 14px' }} onClick={() => { if (novoEnderecoForm.trim()) { setNovo({ ...novo, enderecos: [...novo.enderecos, novoEnderecoForm.trim()] }); setNovoEnderecoForm(''); } }}>+</button>
+            </div>
+            {novo.enderecos.length > 0 && (
+              <div style={{ marginTop: '8px' }}>
+                {novo.enderecos.map((end, idx) => (
+                  <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 10px', background: 'var(--neutral-100)', borderRadius: '4px', marginBottom: '4px', fontSize: '13px' }}>
+                    <span>{end}</span>
+                    <button type="button" className="link-btn" style={{ color: 'var(--red)' }} onClick={() => setNovo({ ...novo, enderecos: novo.enderecos.filter((_, i) => i !== idx) })}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="form-group"><label>Descrição da Infração</label>
+            <textarea placeholder="Descreva os detalhes da infração..." value={novo.descricaoInfracao} onChange={(e) => setNovo({ ...novo, descricaoInfracao: e.target.value })} style={{ minHeight: '100px', resize: 'vertical' }} />
+          </div>
+
           <div className="form-actions">
             <button className="btn-primary" onClick={criarProcesso}>Autuar Processo</button>
             <button className="btn-secondary" onClick={() => { setView('dashboard'); setEstadoNovoProcesso(''); setDataInicioPrazoMaster(''); }}>Cancelar</button>
