@@ -174,7 +174,6 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const [editandoInfo, setEditandoInfo] = useState(false);
   const [editForm, setEditForm] = useState({ numeroSEI: '', parte: '', valorMulta: '' });
   const [showArNaoCumpridoForm, setShowArNaoCumpridoForm] = useState(false);
-  const [novoEndereco, setNovoEndereco] = useState('');
   const [semNovoEndereco, setSemNovoEndereco] = useState(false);
   const [showArquivarForm, setShowArquivarForm] = useState(false);
   const [motivoArquivar, setMotivoArquivar] = useState('');
