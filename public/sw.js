@@ -1,8 +1,26 @@
 // Service Worker - ASSTEC Sistema de Despacho
 // Responsável por receber e exibir push notifications nativas
 
+const CACHE_VERSION = `asstec-v${new Date().toISOString().split('T')[0]}`;
+
 self.addEventListener('install', () => self.skipWaiting());
-self.addEventListener('activate', (e) => e.waitUntil(clients.claim()));
+
+self.addEventListener('activate', (e) => {
+  e.waitUntil(
+    Promise.all([
+      clients.claim(),
+      caches.keys().then((names) => {
+        return Promise.all(
+          names.map((name) => {
+            if (name !== CACHE_VERSION && name.startsWith('asstec-v')) {
+              return caches.delete(name);
+            }
+          })
+        );
+      })
+    ])
+  );
+});
 
 self.addEventListener('push', (event) => {
   if (!event.data) return;
