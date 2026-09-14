@@ -158,6 +158,10 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const [novo, setNovo] = useState({ numeroSEI: '', parte: '', valorMulta: '', autoInfracao: '', termoSancao: '', enderecos: [], descricaoInfracao: '' });
   const [dataInput, setDataInput] = useState('');
   const [novoEndereco, setNovoEndereco] = useState({ logradouro: '', numero: '', bairro: '', cep: '', cidade: '', uf: '', complemento: '' });
+  // Texto livre do "AR Não Cumprido" (pesquisa de novo endereço do
+  // interessado) — estado separado do objeto estruturado acima, que é
+  // usado só no formulário de autuação de Novo Processo.
+  const [novoEnderecoTexto, setNovoEnderecoTexto] = useState('');
   const [showIncidenteModal, setShowIncidenteModal] = useState(false);
   const [incidenteForm, setIncidenteForm] = useState({ tipo: 'TAC', observacao: '', considerarCumprido: true });
   const [showResolverIncidente, setShowResolverIncidente] = useState(false);
@@ -230,7 +234,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     setObservacaoInput(selected?.observacao || '');
     setEditandoInfo(false);
     setShowArNaoCumpridoForm(false);
-    setNovoEndereco('');
+    setNovoEnderecoTexto('');
     setSemNovoEndereco(false);
     setShowArquivarForm(false);
     setMotivoArquivar('');
@@ -718,26 +722,26 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                 </p>
                 <div className="form-group">
                   <label>Novo(s) Endereço(s) Encontrado(s)</label>
-                  <textarea value={novoEndereco} disabled={semNovoEndereco}
-                    onChange={(e) => setNovoEndereco(e.target.value)}
+                  <textarea value={novoEnderecoTexto} disabled={semNovoEndereco}
+                    onChange={(e) => setNovoEnderecoTexto(e.target.value)}
                     placeholder="Descreva o(s) novo(s) endereço(s) encontrado(s)..." />
                 </div>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', margin: '8px 0' }}>
-                  <input type="checkbox" checked={semNovoEndereco} onChange={(e) => { setSemNovoEndereco(e.target.checked); if (e.target.checked) setNovoEndereco(''); }} />
+                  <input type="checkbox" checked={semNovoEndereco} onChange={(e) => { setSemNovoEndereco(e.target.checked); if (e.target.checked) setNovoEnderecoTexto(''); }} />
                   Não foram encontrados novos endereços
                 </label>
                 <div className="form-actions">
-                  <button className="btn-primary" disabled={!semNovoEndereco && !novoEndereco.trim()}
+                  <button className="btn-primary" disabled={!semNovoEndereco && !novoEnderecoTexto.trim()}
                     onClick={() => {
-                      if (semNovoEndereco || !novoEndereco.trim()) {
+                      if (semNovoEndereco || !novoEnderecoTexto.trim()) {
                         pedirConfirmacao('Confirma que o AR voltou não cumprido e que nenhum novo endereço foi encontrado? O processo seguirá para Pendente de Edital.', () => { arNaoCumprido(p); setShowArNaoCumpridoForm(false); });
                       } else {
-                        pedirConfirmacao('Confirma o novo endereço encontrado? O processo voltará para Pendente de Notificação, para expedição de nova notificação.', () => { registrarNovoEnderecoENotificar(p, novoEndereco.trim()); setShowArNaoCumpridoForm(false); setNovoEndereco(''); });
+                        pedirConfirmacao('Confirma o novo endereço encontrado? O processo voltará para Pendente de Notificação, para expedição de nova notificação.', () => { registrarNovoEnderecoENotificar(p, novoEnderecoTexto.trim()); setShowArNaoCumpridoForm(false); setNovoEnderecoTexto(''); });
                       }
                     }}>
                     Confirmar
                   </button>
-                  <button className="btn-secondary" onClick={() => { setShowArNaoCumpridoForm(false); setNovoEndereco(''); setSemNovoEndereco(false); }}>Cancelar</button>
+                  <button className="btn-secondary" onClick={() => { setShowArNaoCumpridoForm(false); setNovoEnderecoTexto(''); setSemNovoEndereco(false); }}>Cancelar</button>
                 </div>
               </div>
             )}
