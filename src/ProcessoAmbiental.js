@@ -15,6 +15,7 @@ const ESTADOS_AMBIENTAL = {
   triagem:                              { label: 'Aguardando Triagem Inicial',                          nucleo: 'asstec',       ordem: 1 },
   pendente_notificacao:                 { label: 'Pendente de Notificação',                              nucleo: 'notificacoes', ordem: 2 },
   pendente_retorno_ar:                  { label: 'Pendente de Retorno de AR',                            nucleo: 'notificacoes', ordem: 3 },
+  ar_sem_retorno_rastreio:              { label: 'AR Sem Retorno — Consulta de Rastreio (+60 dias)',     nucleo: 'notificacoes', ordem: 3.5, destaqueAcimaDe: 'pendente_retorno_ar' },
   aguardando_prazo_ar:                  { label: 'Aguardando Decurso de Prazo de AR',                    nucleo: 'notificacoes', ordem: 4, auto: true },
   pendente_certificacao_ar:             { label: 'Pendente de Certificação (AR)',                        nucleo: 'notificacoes', ordem: 4.1, certificacao: true },
   pendente_edital:                      { label: 'Pendente de Edital',                                   nucleo: 'asstec',       ordem: 5 },
@@ -25,6 +26,8 @@ const ESTADOS_AMBIENTAL = {
   aguardando_analise_minuta_gabinete:   { label: 'Aguardando Análise de Minuta pelo Gabinete',           nucleo: 'asstec',       ordem: 8.5 },
   triagem_despacho_notificacao_decisao: { label: 'Triagem de Despacho/Notificação após Decisão',         nucleo: 'asstec',       ordem: 8.7 },
   pendente_notificacao_decisao:         { label: 'Pendente de Notificação de Decisão (AR/Email/WPP)',    nucleo: 'notificacoes', ordem: 9 },
+  pendente_retorno_ar_decisao:          { label: 'Pendente de Retorno de AR (Notificação de Decisão)',   nucleo: 'notificacoes', ordem: 9.4 },
+  ar_sem_retorno_rastreio_decisao:      { label: 'AR Sem Retorno — Consulta de Rastreio (+60 dias)',     nucleo: 'notificacoes', ordem: 9.45, destaqueAcimaDe: 'pendente_retorno_ar_decisao' },
   aguardando_prazo_notificacao_decisao: { label: 'Aguardando Decurso de Prazo de Notificação',           nucleo: 'notificacoes', ordem: 10, auto: true },
   pendente_certificacao_decisao:        { label: 'Pendente de Certificação',                             nucleo: 'notificacoes', ordem: 10.1, certificacao: true },
   pendente_edital_decisao:              { label: 'Pendente de Edital da Decisão',                        nucleo: 'asstec',       ordem: 11 },
@@ -54,6 +57,36 @@ const PROXIMO_AUTOMATICO = {
   aguardando_prazo_notificacao_decisao: 'pendente_certificacao_decisao',
   aguardando_prazo_recurso_edital: 'pendente_certificacao_edital_decisao',
   cobranca_administrativa: 'pendente_envio_pge',
+};
+
+// Ciclos de "aguardando retorno de AR": mesma estrutura usada tanto na
+// notificação inicial quanto na notificação da decisão — cada um define o
+// estado de "sem retorno/consulta de rastreio" para onde migra automaticamente
+// após 60 dias, e os destinos de cada ação manual (recebido, edital, nova
+// notificação).
+const CICLOS_AR = {
+  pendente_retorno_ar: {
+    semRetorno: 'ar_sem_retorno_rastreio',
+    labelData: 'Data de Recebimento do AR',
+    labelBotaoConfirmar: 'Confirmar Recebimento do AR',
+    campoData: 'recebimentoAR',
+    estadoPrazo: 'aguardando_prazo_ar',
+    estadoEdital: 'pendente_edital',
+    labelEdital: 'Pendente de Edital',
+    estadoNotificacao: 'pendente_notificacao',
+    labelNotificacao: 'Pendente de Notificação',
+  },
+  pendente_retorno_ar_decisao: {
+    semRetorno: 'ar_sem_retorno_rastreio_decisao',
+    labelData: 'Data de Notificação da Decisão (AR/Email/WPP)',
+    labelBotaoConfirmar: 'Confirmar Notificação da Decisão',
+    campoData: 'notificacaoDecisao',
+    estadoPrazo: 'aguardando_prazo_notificacao_decisao',
+    estadoEdital: 'pendente_edital_decisao',
+    labelEdital: 'Edital da Decisão',
+    estadoNotificacao: 'pendente_notificacao_decisao',
+    labelNotificacao: 'Pendente de Notificação de Decisão',
+  },
 };
 
 // ─── Dias úteis (feriados nacionais fixos + móveis) ─────────────────
@@ -268,6 +301,13 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           const proximo = PROXIMO_AUTOMATICO[p.estado];
           if (proximo) moverProcesso(p, proximo, 'automatica');
         }
+        // Mais de 60 dias sem retorno do AR (notificação inicial ou da
+        // decisão): sai do fluxo normal e vai para a caixa de consulta de
+        // rastreio, para triagem manual.
+        const cicloAR = CICLOS_AR[p.estado];
+        if (cicloAR && diasNoEstado(p.entradaNoEstadoEm) > 60) {
+          moverProcesso(p, cicloAR.semRetorno, 'automatica');
+        }
       });
     };
     checar();
@@ -327,17 +367,106 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     setView('dashboard'); setSelectedId(null);
   };
 
-  // AR devolvido sem cumprimento (não entregue) — pula direto para o Edital,
-  // sem aguardar os 20 dias de contagem (não há AR válido para contar).
-  const arNaoCumprido = (p) => moverProcesso(p, 'pendente_edital', 'manual', { 'datas.arNaoCumpridoEm': new Date().toISOString().slice(0, 10) });
+  // Renderiza o formulário de "Pendente de Retorno de AR" — usado tanto na
+  // notificação inicial quanto na notificação da decisão (mesma estrutura,
+  // cfg define os textos e destinos de cada uma).
+  const renderRetornoAR = (p, cfg) => (
+    <div className="form-group">
+      <label>{cfg.labelData}</label>
+      <input type="date" value={dataInput} onChange={(e) => setDataInput(e.target.value)} />
+      <div className="action-buttons" style={{ marginTop: '10px' }}>
+        <button className="btn-primary" disabled={!dataInput}
+          onClick={() => pedirConfirmacao(`Confirma o registro em ${new Date(dataInput + 'T12:00:00').toLocaleDateString('pt-BR')}? A contagem do prazo de 20 dias será iniciada.`, () => { iniciarPrazo(p, cfg.campoData, dataInput, cfg.estadoPrazo); setDataInput(''); })}>
+          {cfg.labelBotaoConfirmar}
+        </button>
+        {!showArNaoCumpridoForm && (
+          <button className="btn-secondary" onClick={() => setShowArNaoCumpridoForm(true)}>AR Não Cumprido</button>
+        )}
+      </div>
 
-  // Quando um novo endereço é encontrado após AR não cumprido, o processo
-  // volta para Pendente de Notificação (novo ciclo de notificação), em vez
-  // de seguir direto para o Edital.
-  const registrarNovoEnderecoENotificar = (p, endereco) => moverProcesso(p, 'pendente_notificacao', 'manual', {
-    'datas.novoEnderecoEncontradoEm': new Date().toISOString().slice(0, 10),
-    novoEndereco: endereco,
-  });
+      {showArNaoCumpridoForm && (
+        <div className="info-box" style={{ marginTop: '14px' }}>
+          <label>⚠️ AR Não Cumprido — Pesquisa de Novo Endereço</label>
+          <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+            Antes de encaminhar para o {cfg.labelEdital}, pesquise e informe abaixo eventual(is) novo(s) endereço(s) encontrado(s) do interessado, para que seja expedida uma nova notificação. Se nenhum endereço novo foi encontrado, marque a opção correspondente.
+          </p>
+          <div className="form-group">
+            <label>Novo(s) Endereço(s) Encontrado(s)</label>
+            <textarea value={novoEnderecoTexto} disabled={semNovoEndereco}
+              onChange={(e) => setNovoEnderecoTexto(e.target.value)}
+              placeholder="Descreva o(s) novo(s) endereço(s) encontrado(s)..." />
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', margin: '8px 0' }}>
+            <input type="checkbox" checked={semNovoEndereco} onChange={(e) => { setSemNovoEndereco(e.target.checked); if (e.target.checked) setNovoEnderecoTexto(''); }} />
+            Não foram encontrados novos endereços
+          </label>
+          <div className="form-actions">
+            <button className="btn-primary" disabled={!semNovoEndereco && !novoEnderecoTexto.trim()}
+              onClick={() => {
+                if (semNovoEndereco || !novoEnderecoTexto.trim()) {
+                  pedirConfirmacao(`Confirma que o AR voltou não cumprido e que nenhum novo endereço foi encontrado? O processo seguirá para ${cfg.labelEdital}.`, () => { moverProcesso(p, cfg.estadoEdital, 'manual', { 'datas.arNaoCumpridoEm': new Date().toISOString().slice(0, 10) }); setShowArNaoCumpridoForm(false); });
+                } else {
+                  pedirConfirmacao(`Confirma o novo endereço encontrado? O processo voltará para ${cfg.labelNotificacao}, para expedição de nova notificação.`, () => { moverProcesso(p, cfg.estadoNotificacao, 'manual', { 'datas.novoEnderecoEncontradoEm': new Date().toISOString().slice(0, 10), novoEndereco: novoEnderecoTexto.trim() }); setShowArNaoCumpridoForm(false); setNovoEnderecoTexto(''); });
+                }
+              }}>
+              Confirmar
+            </button>
+            <button className="btn-secondary" onClick={() => { setShowArNaoCumpridoForm(false); setNovoEnderecoTexto(''); setSemNovoEndereco(false); }}>Cancelar</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  // Renderiza a caixa "AR Sem Retorno — Consulta de Rastreio" (+60 dias),
+  // com as três ações possíveis a partir de uma consulta de rastreamento.
+  const renderSemRetornoAR = (p, cfg) => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+      <div className="alert-banner warning">
+        ⏰ Este processo está há mais de 60 dias aguardando retorno do AR e foi movido automaticamente para esta caixa, para triagem a partir de consulta de rastreio.
+      </div>
+
+      <div className="info-box">
+        <label>1️⃣ AR Certificado a partir de Consulta de Rastreio — Encaminhar para {cfg.labelEdital}</label>
+        <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '10px' }}>
+          O AR não retornou, mas a partir de consulta no rastreio se verificou que ele foi devolvido ao remetente, porque o destinatário não foi encontrado.
+        </p>
+        <button className="btn-primary" onClick={() => pedirConfirmacao(`Confirma que o AR foi devolvido por destinatário não encontrado? O processo seguirá para ${cfg.labelEdital}.`, () => moverProcesso(p, cfg.estadoEdital, 'manual', { 'datas.arCertificadoRastreioEm': new Date().toISOString().slice(0, 10) }))}>
+          Encaminhar para {cfg.labelEdital}
+        </button>
+      </div>
+
+      <div className="info-box">
+        <label>2️⃣ AR Certificado a partir de Consulta de Rastreio — AR Cumprido</label>
+        <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '10px' }}>
+          O AR não retornou, mas a partir de consulta no rastreio se verificou que ele foi cumprido na data tal (recebido pelo destinatário). Informe a data de recebimento abaixo.
+        </p>
+        <div className="form-group">
+          <label>Data de Recebimento do AR</label>
+          <input type="date" value={dataInput} onChange={(e) => setDataInput(e.target.value)} />
+        </div>
+        <button className="btn-primary" disabled={!dataInput}
+          onClick={() => pedirConfirmacao(`Confirma o recebimento do AR em ${new Date(dataInput + 'T12:00:00').toLocaleDateString('pt-BR')}, verificado por consulta de rastreio? A contagem do prazo de 20 dias será iniciada.`, () => { iniciarPrazo(p, cfg.campoData, dataInput, cfg.estadoPrazo); setDataInput(''); })}>
+          AR Cumprido — Iniciar Prazo
+        </button>
+      </div>
+
+      <div className="info-box">
+        <label>3️⃣ AR Extraviado</label>
+        <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '10px' }}>
+          Sem informações se foi ou quando foi cumprido. Proceder a segunda notificação.
+        </p>
+        <div className="action-buttons">
+          <button className="btn-secondary" onClick={() => pedirConfirmacao('Confirma que a segunda notificação já foi enviada? O processo voltará a aguardar o retorno do AR.', () => moverProcesso(p, cfg.origemId, 'manual', { 'datas.segundaNotificacaoEm': new Date().toISOString().slice(0, 10) }))}>
+            a) Segunda Notificação Já Enviada
+          </button>
+          <button className="btn-secondary" onClick={() => pedirConfirmacao(`Confirma o envio para ${cfg.labelNotificacao}, para expedição de nova notificação?`, () => moverProcesso(p, cfg.estadoNotificacao))}>
+            b) Enviar para {cfg.labelNotificacao}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
   // Salva a observação livre do processo (campo de anotações gerais).
   const salvarObservacao = async (p) => {
@@ -561,8 +690,12 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   // (estados com contagem automática de prazo — sem nenhuma ação manual — ficam
   // de fora dos cards; continuam visíveis em "Todos os Processos"). O master
   // vê tudo, inclusive as contagens automáticas, para ter visão completa.
+  const ESTADOS_FORA_DO_FLUXO_PRINCIPAL = ['ar_sem_retorno_rastreio', 'ar_sem_retorno_rastreio_decisao'];
   const estadosVisiveis = Object.entries(ESTADOS_AMBIENTAL)
-    .filter(([, e]) => (isMaster || podeAdministrar || publico || !e.auto) && (nucleoView === 'todos' || e.nucleo === nucleoView || e.nucleo === 'ambos'))
+    // Os estados "sem retorno/consulta de rastreio" não entram no fluxo
+    // principal — cada um tem card próprio, destacado acima do respectivo
+    // "Pendente de Retorno de AR" (ver renderização da dashboard).
+    .filter(([id, e]) => !ESTADOS_FORA_DO_FLUXO_PRINCIPAL.includes(id) && (isMaster || podeAdministrar || publico || !e.auto) && (nucleoView === 'todos' || e.nucleo === nucleoView || e.nucleo === 'ambos'))
     .sort((a, b) => a[1].ordem - b[1].ordem);
 
   const ativos = processos.filter((p) => !p.concluido && !p.incidente?.ativo);
@@ -586,9 +719,17 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   // moverProcesso) reinicia o contador para todos.
   const vezesVisto = (p) => p.vistoPor?.[currentUser] || 0;
   const naoVistos = (id) => contarEstado(id).filter((p) => vezesVisto(p) === 0);
-  // Aguardando Retorno de AR: alerta vermelho quando algum processo já
-  // passou de 60 dias sem registro de retorno.
-  const temARAtrasado = (id) => id === 'pendente_retorno_ar' && contarEstado(id).some((p) => diasNoEstado(p.entradaNoEstadoEm) > 60);
+  // Prazos internos por estado — quando estourados, o card do estado pisca
+  // em vermelho e mostra "X processos fora do prazo" (informação persistente,
+  // como a de urgentes). Retorno de AR: 60 dias (na prática, o verificador
+  // periódico já migra esses processos para "AR Sem Retorno" em até 1h, mas
+  // o alerta cobre a janela até essa migração rodar). Diligência: 7 dias.
+  const PRAZO_DIAS_POR_ESTADO = { pendente_retorno_ar: 60, pendente_retorno_ar_decisao: 60, pendente_diligencia: 7 };
+  const contarForaPrazo = (id) => {
+    const limite = PRAZO_DIAS_POR_ESTADO[id];
+    if (!limite) return 0;
+    return contarEstado(id).filter((p) => diasNoEstado(p.entradaNoEstadoEm) > limite).length;
+  };
   // Contagem de urgentes por estado — ao contrário do aviso de "novo
   // processo", essa informação nunca some, independente de já ter sido visto.
   const contarUrgentes = (id) => contarEstado(id).filter((p) => p.urgente).length;
@@ -700,53 +841,14 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
         return <button className="btn-primary" onClick={() => pedirConfirmacao('Confirma que a notificação foi enviada? O processo passará a aguardar o retorno do AR.', () => moverProcesso(p, 'pendente_retorno_ar'))}>Notificação Enviada → Aguardar Retorno de AR</button>;
 
       case 'pendente_retorno_ar':
-        return (
-          <div className="form-group">
-            <label>Data de Recebimento do AR</label>
-            <input type="date" value={dataInput} onChange={(e) => setDataInput(e.target.value)} />
-            <div className="action-buttons" style={{ marginTop: '10px' }}>
-              <button className="btn-primary" disabled={!dataInput}
-                onClick={() => pedirConfirmacao(`Confirma o recebimento do AR em ${new Date(dataInput + 'T12:00:00').toLocaleDateString('pt-BR')}? A contagem do prazo de 20 dias será iniciada.`, () => { iniciarPrazo(p, 'recebimentoAR', dataInput, 'aguardando_prazo_ar'); setDataInput(''); })}>
-                Confirmar Recebimento do AR
-              </button>
-              {!showArNaoCumpridoForm && (
-                <button className="btn-secondary" onClick={() => setShowArNaoCumpridoForm(true)}>AR Não Cumprido</button>
-              )}
-            </div>
+      case 'pendente_retorno_ar_decisao':
+        return renderRetornoAR(p, CICLOS_AR[p.estado]);
 
-            {showArNaoCumpridoForm && (
-              <div className="info-box" style={{ marginTop: '14px' }}>
-                <label>⚠️ AR Não Cumprido — Pesquisa de Novo Endereço</label>
-                <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
-                  Antes de encaminhar para o Edital, pesquise e informe abaixo eventual(is) novo(s) endereço(s) encontrado(s) do interessado, para que seja expedida uma nova notificação. Se nenhum endereço novo foi encontrado, marque a opção correspondente.
-                </p>
-                <div className="form-group">
-                  <label>Novo(s) Endereço(s) Encontrado(s)</label>
-                  <textarea value={novoEnderecoTexto} disabled={semNovoEndereco}
-                    onChange={(e) => setNovoEnderecoTexto(e.target.value)}
-                    placeholder="Descreva o(s) novo(s) endereço(s) encontrado(s)..." />
-                </div>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', margin: '8px 0' }}>
-                  <input type="checkbox" checked={semNovoEndereco} onChange={(e) => { setSemNovoEndereco(e.target.checked); if (e.target.checked) setNovoEnderecoTexto(''); }} />
-                  Não foram encontrados novos endereços
-                </label>
-                <div className="form-actions">
-                  <button className="btn-primary" disabled={!semNovoEndereco && !novoEnderecoTexto.trim()}
-                    onClick={() => {
-                      if (semNovoEndereco || !novoEnderecoTexto.trim()) {
-                        pedirConfirmacao('Confirma que o AR voltou não cumprido e que nenhum novo endereço foi encontrado? O processo seguirá para Pendente de Edital.', () => { arNaoCumprido(p); setShowArNaoCumpridoForm(false); });
-                      } else {
-                        pedirConfirmacao('Confirma o novo endereço encontrado? O processo voltará para Pendente de Notificação, para expedição de nova notificação.', () => { registrarNovoEnderecoENotificar(p, novoEnderecoTexto.trim()); setShowArNaoCumpridoForm(false); setNovoEnderecoTexto(''); });
-                      }
-                    }}>
-                    Confirmar
-                  </button>
-                  <button className="btn-secondary" onClick={() => { setShowArNaoCumpridoForm(false); setNovoEnderecoTexto(''); setSemNovoEndereco(false); }}>Cancelar</button>
-                </div>
-              </div>
-            )}
-          </div>
-        );
+      case 'ar_sem_retorno_rastreio':
+      case 'ar_sem_retorno_rastreio_decisao': {
+        const [origemId, cfgSemRetorno] = Object.entries(CICLOS_AR).find(([, c]) => c.semRetorno === p.estado);
+        return renderSemRetornoAR(p, { ...cfgSemRetorno, origemId });
+      }
 
       case 'aguardando_prazo_ar':
       case 'aguardando_prazo_edital':
@@ -832,23 +934,14 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
         const dias = diasNoEstado(p.entradaNoEstadoEm);
         return (
           <>
-            {dias > 20 && <div className="alert-banner warning" style={{ marginBottom: '12px' }}>⚠️ Processo parado há {dias} dias nesta etapa.</div>}
-            <button className="btn-primary" onClick={() => pedirConfirmacao('Confirma que a diligência foi cumprida? O processo seguirá para Notificação de Decisão.', () => moverProcesso(p, 'pendente_notificacao_decisao'))}>Diligência Cumprida → Notificar Decisão</button>
+            {dias > 7 && <div className="alert-banner warning" style={{ marginBottom: '12px' }}>⏰ Fora do prazo — processo parado há {dias} dias nesta etapa (prazo de cumprimento: 7 dias).</div>}
+            <button className="btn-primary" onClick={() => pedirConfirmacao('Confirma que a diligência foi cumprida? O processo será devolvido à Conclusão de Julgamento.', () => moverProcesso(p, 'aguardando_saneamento'))}>Diligência Cumprida → Devolver à Conclusão de Julgamento</button>
           </>
         );
       }
 
       case 'pendente_notificacao_decisao':
-        return (
-          <div className="form-group">
-            <label>Data de Notificação da Decisão (AR/Email/WPP)</label>
-            <input type="date" value={dataInput} onChange={(e) => setDataInput(e.target.value)} />
-            <button className="btn-primary" style={{ marginTop: '10px' }} disabled={!dataInput}
-              onClick={() => pedirConfirmacao(`Confirma a notificação da decisão em ${new Date(dataInput + 'T12:00:00').toLocaleDateString('pt-BR')}? A contagem do prazo de 20 dias será iniciada.`, () => { iniciarPrazo(p, 'notificacaoDecisao', dataInput, 'aguardando_prazo_notificacao_decisao'); setDataInput(''); })}>
-              Confirmar Notificação da Decisão
-            </button>
-          </div>
-        );
+        return <button className="btn-primary" onClick={() => pedirConfirmacao('Confirma que a notificação da decisão foi enviada? O processo passará a aguardar o retorno do AR.', () => moverProcesso(p, 'pendente_retorno_ar_decisao'))}>Notificação Enviada → Aguardar Retorno de AR</button>;
 
       case 'pendente_certificacao_decisao':
         return (
@@ -950,12 +1043,23 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             </div>
           )}
 
+          {!publico && (nucleoView === 'todos' || nucleoView === 'notificacoes') && ESTADOS_FORA_DO_FLUXO_PRINCIPAL.some((id) => contarEstado(id).length > 0) && (
+            <div className="pa-dash-grid" style={{ marginBottom: '18px' }}>
+              {ESTADOS_FORA_DO_FLUXO_PRINCIPAL.map((id) => contarEstado(id).length > 0 && (
+                <div key={id} className="pa-card pa-card-alerta-rastreio" onClick={() => abrirGrupo(id)}>
+                  <span className="pa-card-count">{contarEstado(id).length}</span>
+                  <span className="pa-card-label">📮 {ESTADOS_AMBIENTAL[id].label}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="pa-flow-grid">
             {estadosVisiveis.map(([id, est], idx) => {
               const novos = publico ? 0 : naoVistos(id).length;
-              const arAtrasado = publico ? false : temARAtrasado(id);
+              const foraPrazo = publico ? 0 : contarForaPrazo(id);
               const urgentes = contarUrgentes(id);
-              const classeBlink = arAtrasado ? 'pa-card-blink-red' : (novos > 0 ? 'pa-card-blink' : '');
+              const classeBlink = foraPrazo > 0 ? 'pa-card-blink-red' : (novos > 0 ? 'pa-card-blink' : '');
               const setorLabel = est.nucleo === 'asstec' ? 'ASSTEC' : est.nucleo === 'notificacoes' ? 'Núcleo de Notificação' : null;
               return (
                 <React.Fragment key={id}>
@@ -966,6 +1070,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                     {setorLabel && <span className="pa-card-sector-badge">{setorLabel}</span>}
                     <span className="pa-card-count">{contarEstado(id).length}</span>
                     <span className="pa-card-label">{est.label}</span>
+                    {foraPrazo > 0 && <span className="pa-card-urgent-badge">⏰ {foraPrazo} processo{foraPrazo === 1 ? '' : 's'} fora do prazo</span>}
                     {urgentes > 0 && <span className="pa-card-urgent-badge">🔴 Processos urgentes: {urgentes}</span>}
                     {novos > 0 && <span className="pa-card-new-badge">{novos} novo{novos === 1 ? '' : 's'} processo{novos === 1 ? '' : 's'}</span>}
                   </div>
@@ -1188,12 +1293,13 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                 )}
 
                 {listaExibida.map((p) => {
-                  const arAtrasado = p.estado === 'pendente_retorno_ar' && diasNoEstado(p.entradaNoEstadoEm) > 60;
+                  const limitePrazo = PRAZO_DIAS_POR_ESTADO[p.estado];
+                  const foraDoPrazo = !!limitePrazo && diasNoEstado(p.entradaNoEstadoEm) > limitePrazo;
                   const éNovo = estadoFiltro && estadoFiltro !== '__incidente__' && vezesVisto(p) < 3;
-                  // Prioridade visual: AR atrasado (vermelho) > urgente/atenção
-                  // (amarelo) > órgão público (verde) > novo processo (pisca).
-                  const marcadorClasse = arAtrasado
-                    ? 'card-item-alerta'
+                  // Prioridade visual: fora do prazo (pisca vermelho) > urgente/
+                  // atenção (amarelo) > órgão público (verde) > novo processo (pisca).
+                  const marcadorClasse = foraDoPrazo
+                    ? 'card-item-blink-red'
                     : (p.urgente || p.atencao)
                       ? 'card-item-marcado-amarelo'
                       : p.orgaoPublico
@@ -1212,8 +1318,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                           <strong>{p.numeroSEI}</strong>
                           <span className="badge status-pendente">{p.incidente?.ativo ? '🚧 Incidente' : ESTADOS_AMBIENTAL[p.estado]?.label}</span>
                         </div>
-                        {(p.urgente || p.atencao) && (
+                        {(foraDoPrazo || p.urgente || p.atencao) && (
                           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', margin: '2px 0 6px' }}>
+                            {foraDoPrazo && <span className="card-item-tag card-item-tag-atraso">⏰ Fora do Prazo</span>}
                             {p.urgente && <span className="card-item-tag card-item-tag-urgente">🔴 Urgente</span>}
                             {p.atencao && <span className="card-item-tag card-item-tag-atencao">⚠️ Atenção</span>}
                           </div>
@@ -1222,7 +1329,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                         <p className="card-text"><strong>Parte:</strong> {p.parte}</p>
                         <p className="card-text"><strong>Autuado em:</strong> {new Date(p.dataAutuacao).toLocaleDateString('pt-BR')}</p>
                         <p className="card-text"><strong>Dias no estado atual:</strong> {diasNoEstado(p.entradaNoEstadoEm)} dia(s)</p>
-                        {arAtrasado && <p className="card-text" style={{ color: 'var(--accent-red, #B14C40)', fontWeight: 700 }}>⚠️ Mais de 60 dias sem retorno do AR</p>}
+                        {foraDoPrazo && <p className="card-text" style={{ color: 'var(--accent-red, #B14C40)', fontWeight: 700 }}>⚠️ Mais de {limitePrazo} dias neste estado</p>}
                       </div>
                     </div>
                     <button className="btn-secondary" style={{ alignSelf: 'flex-start', marginTop: '4px' }} onClick={() => { setSelectedId(p.id); setView('detalhe'); }}>Ver Detalhes →</button>

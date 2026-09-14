@@ -3921,6 +3921,15 @@ button, input, select, textarea {
   color: var(--accent-red, #c0392b);
 }
 
+.pa-card-alerta-rastreio {
+  border-color: var(--accent-gold, #B5923E);
+  background: rgba(181, 146, 62, 0.08);
+}
+
+.pa-card-alerta-rastreio .pa-card-count {
+  color: var(--accent-gold-dark, #8B701F);
+}
+
 @keyframes pa-blink {
   0%, 100% { background: var(--bg-card); box-shadow: 0 0 0 0 rgba(181, 146, 62, 0.6); }
   50% { background: rgba(181, 146, 62, 0.22); box-shadow: 0 0 0 10px rgba(181, 146, 62, 0); }
@@ -4091,6 +4100,24 @@ button, input, select, textarea {
   border-color: var(--accent-gold, #B5923E) !important;
   border-width: 2px;
   animation: card-item-blink 1.2s infinite;
+}
+
+@keyframes card-item-blink-red {
+  0%, 100% { background: var(--bg-card); box-shadow: 0 0 0 0 rgba(177, 76, 64, 0.55); }
+  50% { background: rgba(177, 76, 64, 0.16); box-shadow: 0 0 0 6px rgba(177, 76, 64, 0); }
+}
+
+/* Processo fora do prazo (retorno de AR +60 dias, diligência +7 dias) —
+   pisca em vermelho, mais chamativo que o alerta estático. */
+.card-item-blink-red {
+  border-color: var(--accent-red, #B14C40) !important;
+  border-width: 2px;
+  animation: card-item-blink-red 1.2s infinite;
+}
+
+.card-item-tag-atraso {
+  color: #fff;
+  background: var(--accent-red, #B14C40);
 }
 
 .card-item-new-badge {
