@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase-config';
-import { collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, getDocs, query, where } from 'firebase/firestore';
+import { collection, doc, updateDoc, deleteDoc, onSnapshot, runTransaction } from 'firebase/firestore';
 
 // ═══════════════════════════════════════════════════════════════════
 // PROCESSO ADMINISTRATIVO AMBIENTAL — módulo separado e autônomo do
@@ -498,22 +498,46 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     if (!editForm.numeroSEI.trim() || !editForm.parte.trim()) { alert('Preencha o número SEI e o nome da parte.'); return; }
 
     const numeroSEITrim = editForm.numeroSEI.trim();
-    // Se o número SEI foi alterado, verifica se não existe outro processo com esse número
-    if (numeroSEITrim !== p.numeroSEI) {
-      const q = query(collection(db, 'processosAmbientais'), where('numeroSEI', '==', numeroSEITrim));
-      const snap = await getDocs(q);
-      if (!snap.empty) {
-        alert(`❌ Já existe um processo cadastrado com o número SEI ${numeroSEITrim}.\n\nEscolha outro número.`);
-        return;
-      }
-    }
+    const novosDigits = onlyDigits(numeroSEITrim);
+    const antigosDigits = onlyDigits(p.numeroSEI);
+    const mudouSEI = novosDigits !== antigosDigits;
 
-    await updateDoc(doc(db, 'processosAmbientais', p.id), {
-      numeroSEI: numeroSEITrim,
-      numeroSEIDigits: onlyDigits(numeroSEITrim),
-      parte: editForm.parte.trim(),
-      valorMulta: parseMoeda(editForm.valorMulta),
-    });
+    try {
+      if (mudouSEI) {
+        // Mesma trava transacional da autuação: reivindica a reserva do
+        // novo número (falhando se outro processo já a detém) e libera a
+        // reserva do número antigo, tudo atomicamente.
+        const novaReservaRef = doc(db, 'processosAmbientaisSEI', novosDigits);
+        const antigaReservaRef = doc(db, 'processosAmbientaisSEI', antigosDigits);
+        await runTransaction(db, async (tx) => {
+          const novaSnap = await tx.get(novaReservaRef);
+          if (novaSnap.exists() && novaSnap.data().processoId !== p.id) throw new Error('SEI_DUPLICADO');
+          tx.set(novaReservaRef, { numeroSEI: numeroSEITrim, processoId: p.id, criadoEm: new Date().toISOString() });
+          tx.delete(antigaReservaRef);
+          tx.update(doc(db, 'processosAmbientais', p.id), {
+            numeroSEI: numeroSEITrim,
+            numeroSEIDigits: novosDigits,
+            parte: editForm.parte.trim(),
+            valorMulta: parseMoeda(editForm.valorMulta),
+          });
+        });
+      } else {
+        await updateDoc(doc(db, 'processosAmbientais', p.id), {
+          numeroSEI: numeroSEITrim,
+          numeroSEIDigits: novosDigits,
+          parte: editForm.parte.trim(),
+          valorMulta: parseMoeda(editForm.valorMulta),
+        });
+      }
+    } catch (e) {
+      if (e.message === 'SEI_DUPLICADO') {
+        alert(`❌ Já existe um processo cadastrado com o número SEI ${numeroSEITrim}.\n\nEscolha outro número.`);
+      } else {
+        console.error('❌ Erro ao editar processo:', e.message);
+        alert('❌ Erro ao salvar as alterações. Tente novamente.');
+      }
+      return;
+    }
     setEditandoInfo(false);
   };
 
@@ -575,14 +599,8 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const criarProcesso = async () => {
     if (!novo.numeroSEI.trim() || !novo.parte.trim()) { alert('Preencha o número SEI e o nome da parte.'); return; }
 
-    // Verifica se já existe processo com esse número SEI (evita duplicação)
     const numeroSEITrim = novo.numeroSEI.trim();
-    const q = query(collection(db, 'processosAmbientais'), where('numeroSEI', '==', numeroSEITrim));
-    const snap = await getDocs(q);
-    if (!snap.empty) {
-      alert(`❌ Já existe um processo cadastrado com o número SEI ${numeroSEITrim}.\n\nVerifique o número e tente novamente.`);
-      return;
-    }
+    const numeroSEIDigits = onlyDigits(numeroSEITrim);
 
     const estadoInicial = ((isMaster || podeAdministrar) && estadoNovoProcesso) ? estadoNovoProcesso : 'triagem';
 
@@ -598,23 +616,47 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     const datasIniciais = infoPrazoInicial ? { [infoPrazoInicial.campo]: dataInicioPrazoMaster } : {};
     const prazoInicial = infoPrazoInicial ? { ...calcularPrazo20Dias(dataInicioPrazoMaster), origem: estadoInicial } : null;
 
-    await addDoc(collection(db, 'processosAmbientais'), {
-      numeroSEI: numeroSEITrim,
-      numeroSEIDigits: onlyDigits(numeroSEITrim),
-      parte: novo.parte.trim(),
-      valorMulta: parseMoeda(novo.valorMulta),
-      autoInfracao: novo.autoInfracao.trim(),
-      termoSancao: novo.termoSancao.trim(),
-      enderecos: novo.enderecos,
-      descricaoInfracao: novo.descricaoInfracao.trim(),
-      estado: estadoInicial,
-      dataAutuacao: new Date().toISOString().slice(0, 10),
-      entradaNoEstadoEm: new Date().toISOString(),
-      vistoPor: {},
-      datas: datasIniciais, historico: [], incidente: null, concluido: false,
-      ...(prazoInicial ? { prazo: prazoInicial } : {}),
-      criadoEm: new Date().toISOString(), criadoPor: currentUser,
-    });
+    // Trava real contra número SEI duplicado: a existência do processo é
+    // decidida por uma transação atômica sobre um documento de "reserva"
+    // (processosAmbientaisSEI/<dígitos do SEI>) — ao contrário de uma
+    // consulta seguida de gravação separada, duas autuações simultâneas com
+    // o mesmo número não conseguem mais passar as duas ao mesmo tempo: a
+    // segunda sempre encontra a reserva já criada pela primeira e falha.
+    const novoRef = doc(collection(db, 'processosAmbientais'));
+    const reservaRef = doc(db, 'processosAmbientaisSEI', numeroSEIDigits);
+    try {
+      await runTransaction(db, async (tx) => {
+        const reservaSnap = await tx.get(reservaRef);
+        if (reservaSnap.exists()) throw new Error('SEI_DUPLICADO');
+        tx.set(reservaRef, { numeroSEI: numeroSEITrim, processoId: novoRef.id, criadoEm: new Date().toISOString() });
+        tx.set(novoRef, {
+          numeroSEI: numeroSEITrim,
+          numeroSEIDigits,
+          parte: novo.parte.trim(),
+          valorMulta: parseMoeda(novo.valorMulta),
+          autoInfracao: novo.autoInfracao.trim(),
+          termoSancao: novo.termoSancao.trim(),
+          enderecos: novo.enderecos,
+          descricaoInfracao: novo.descricaoInfracao.trim(),
+          estado: estadoInicial,
+          dataAutuacao: new Date().toISOString().slice(0, 10),
+          entradaNoEstadoEm: new Date().toISOString(),
+          vistoPor: {},
+          datas: datasIniciais, historico: [], incidente: null, concluido: false,
+          ...(prazoInicial ? { prazo: prazoInicial } : {}),
+          criadoEm: new Date().toISOString(), criadoPor: currentUser,
+        });
+      });
+    } catch (e) {
+      if (e.message === 'SEI_DUPLICADO') {
+        alert(`❌ Já existe um processo cadastrado com o número SEI ${numeroSEITrim}.\n\nVerifique o número e tente novamente.`);
+      } else {
+        console.error('❌ Erro ao autuar processo:', e.message);
+        alert('❌ Erro ao autuar o processo. Tente novamente.');
+      }
+      return;
+    }
+
     setNovo({ numeroSEI: '', parte: '', valorMulta: '', autoInfracao: '', termoSancao: '', enderecos: [], descricaoInfracao: '' });
     setNovoEndereco({ logradouro: '', numero: '', bairro: '', cep: '', cidade: '', uf: '', complemento: '' });
     setEstadoNovoProcesso('');
