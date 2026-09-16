@@ -22,6 +22,7 @@ const ESTADOS_AMBIENTAL = {
   aguardando_prazo_edital:              { label: 'Aguardando Decurso de Prazo de Edital',                nucleo: 'notificacoes', ordem: 6, auto: true },
   pendente_certificacao_edital:         { label: 'Pendente de Certificação (Edital)',                    nucleo: 'notificacoes', ordem: 6.1, certificacao: true },
   aguardando_saneamento:                { label: 'Aguardando Saneamento/Julgamento',                     nucleo: 'asstec',       ordem: 7 },
+  acompanhamento_tacs:                  { label: 'Acompanhamento de TACs',                               nucleo: 'asstec',       ordem: 7.2 },
   pendente_diligencia:                  { label: 'Pendente de Diligência',                                nucleo: 'notificacoes', ordem: 8 },
   aguardando_analise_minuta_gabinete:   { label: 'Aguardando Análise de Minuta pelo Gabinete',           nucleo: 'asstec',       ordem: 8.5 },
   triagem_despacho_notificacao_decisao: { label: 'Triagem de Despacho/Notificação após Decisão',         nucleo: 'asstec',       ordem: 8.7 },
@@ -129,12 +130,20 @@ function proximoDiaUtil(date) {
 }
 
 // 20 dias corridos a partir da data informada; início e fim ajustados p/ dia útil.
-function calcularPrazo20Dias(dataInicioStr) {
+// Dias corridos a partir da data informada; início e fim ajustados para o
+// próximo dia útil apenas se caírem num fim de semana/feriado — a contagem
+// em si nunca pula dias úteis, só os dois pontos de referência são
+// arredondados quando necessário.
+function calcularPrazoDias(dataInicioStr, dias) {
   const inicio = proximoDiaUtil(new Date(dataInicioStr + 'T12:00:00'));
   const fimBruto = new Date(inicio);
-  fimBruto.setDate(fimBruto.getDate() + 20);
+  fimBruto.setDate(fimBruto.getDate() + dias);
   const fim = proximoDiaUtil(fimBruto);
   return { inicio: toISODate(inicio), fim: toISODate(fim) };
+}
+
+function calcularPrazo20Dias(dataInicioStr) {
+  return calcularPrazoDias(dataInicioStr, 20);
 }
 
 function addMeses(date, n) {
@@ -197,6 +206,13 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const [novoEnderecoTexto, setNovoEnderecoTexto] = useState('');
   const [showIncidenteModal, setShowIncidenteModal] = useState(false);
   const [incidenteForm, setIncidenteForm] = useState({ tipo: 'TAC', observacao: '', considerarCumprido: true });
+  // Formulário de "TAC Firmado" — assinatura + obrigações (uma ou mais),
+  // cada uma com prazo em dias corridos a partir da assinatura ou data certa.
+  const [showTacForm, setShowTacForm] = useState(false);
+  const [tacForm, setTacForm] = useState({ dataAssinatura: '', obrigacoes: [{ texto: '', tipoPrazo: 'dias', prazoDias: '', dataLimite: '' }] });
+  // Ao marcar uma obrigação vencida (cumprida/descumprida/prorrogada), qual
+  // está em edição — só uma por vez, para exigir a justificativa da prorrogação.
+  const [obrigacaoEmDecisao, setObrigacaoEmDecisao] = useState(null); // { id, decisao, justificativa, novaData }
   const [showResolverIncidente, setShowResolverIncidente] = useState(false);
   const [resolverForm, setResolverForm] = useState({ tipoResolucao: '', observacao: '' });
   const [confirmAction, setConfirmAction] = useState(null); // { mensagem, onConfirm }
@@ -275,6 +291,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     setDataInicioPrazoMaster('');
     setEditandoDataPrazo(false);
     setNovaDataPrazo('');
+    setShowTacForm(false);
+    setTacForm({ dataAssinatura: '', obrigacoes: [{ texto: '', tipoPrazo: 'dias', prazoDias: '', dataLimite: '' }] });
+    setObrigacaoEmDecisao(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
@@ -715,6 +734,77 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     setResolverForm({ tipoResolucao: '', observacao: '' });
   };
 
+  // ─── TAC (Termo de Ajustamento de Conduta) ────────────────────────
+  // "TAC Firmado" fecha o incidente e move o processo para Acompanhamento
+  // de TACs, com uma ou mais obrigações a cumprir — cada uma com prazo em
+  // dias corridos a partir da assinatura, ou data certa.
+  const firmarTAC = async (p) => {
+    const inc = p.incidente;
+    const obrigacoes = tacForm.obrigacoes
+      .filter((o) => o.texto.trim())
+      .map((o, idx) => {
+        const dataLimite = o.tipoPrazo === 'dias'
+          ? calcularPrazoDias(tacForm.dataAssinatura, Number(o.prazoDias)).fim
+          : o.dataLimite;
+        return {
+          id: `${Date.now()}_${idx}`,
+          texto: o.texto.trim(),
+          tipoPrazo: o.tipoPrazo,
+          prazoDias: o.tipoPrazo === 'dias' ? Number(o.prazoDias) : null,
+          dataLimite,
+          status: 'pendente', // pendente | cumprida | descumprida
+          historico: [],
+        };
+      });
+    await updateDoc(doc(db, 'processosAmbientais', p.id), {
+      estado: 'acompanhamento_tacs',
+      entradaNoEstadoEm: new Date().toISOString(),
+      vistoPor: {},
+      incidente: { ...inc, ativo: false, resolvidoEm: new Date().toISOString(), resolvidoPor: currentUser, tipoResolucao: 'TAC Firmado' },
+      tac: { dataAssinatura: tacForm.dataAssinatura, firmadoPor: currentUser, firmadoEm: new Date().toISOString(), obrigacoes },
+      historico: [...(p.historico || []), { de: 'incidente', para: 'acompanhamento_tacs', em: new Date().toISOString(), por: currentUser, tipo: 'manual' }],
+    });
+    setShowTacForm(false);
+    setTacForm({ dataAssinatura: '', obrigacoes: [{ texto: '', tipoPrazo: 'dias', prazoDias: '', dataLimite: '' }] });
+  };
+
+  // Marca uma obrigação do TAC como cumprida, descumprida ou prorrogada
+  // (essa última exige justificativa e uma nova data limite, e volta a
+  // ficar pendente). Quando todas as obrigações estiverem cumpridas, o
+  // processo é arquivado automaticamente.
+  const marcarObrigacaoTac = async (p, obrigacaoId, decisao, extra = {}) => {
+    const obrigacoes = (p.tac?.obrigacoes || []).map((o) => {
+      if (o.id !== obrigacaoId) return o;
+      const entradaHistorico = { decisao, em: new Date().toISOString(), por: currentUser, ...extra };
+      if (decisao === 'prorrogada') {
+        return { ...o, status: 'pendente', dataLimite: extra.novaData, historico: [...(o.historico || []), entradaHistorico] };
+      }
+      return { ...o, status: decisao, historico: [...(o.historico || []), entradaHistorico] };
+    });
+
+    const todasCumpridas = obrigacoes.length > 0 && obrigacoes.every((o) => o.status === 'cumprida');
+    const updates = { tac: { ...p.tac, obrigacoes } };
+    if (todasCumpridas) {
+      updates.estado = 'arquivado';
+      updates.entradaNoEstadoEm = new Date().toISOString();
+      updates.vistoPor = {};
+      updates.arquivamento = { motivo: 'Todas as obrigações do TAC foram cumpridas.', arquivadoEm: new Date().toISOString(), arquivadoPor: currentUser };
+      updates.historico = [...(p.historico || []), { de: 'acompanhamento_tacs', para: 'arquivado', em: new Date().toISOString(), por: currentUser, tipo: 'automatica' }];
+    }
+    await updateDoc(doc(db, 'processosAmbientais', p.id), updates);
+    setObrigacaoEmDecisao(null);
+  };
+
+  const obrigacaoVencida = (o) => o.status === 'pendente' && o.dataLimite && new Date(o.dataLimite + 'T23:59:59') < new Date();
+  const temObrigacaoVencida = (p) => (p.tac?.obrigacoes || []).some(obrigacaoVencida);
+  const contarTACsVencidos = () => contarEstado('acompanhamento_tacs').filter(temObrigacaoVencida).length;
+
+  // "Pedido de Prioridade": ferramenta interna da ASSTEC, invisível para a
+  // consulta pública e para o Núcleo de Notificações.
+  const marcarPedidoPrioridade = async (p, valor) => {
+    await updateDoc(doc(db, 'processosAmbientais', p.id), { pedidoPrioridade: valor });
+  };
+
   // ─── Visibilidade por núcleo ──────────────────────────────────────
   // Master e quem tem "Admin. Ambiental Total" podem alternar livremente
   // entre Visão Total, ASSTEC e Notificações — por padrão, veem o setor a
@@ -727,17 +817,23 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       : (consultaOutroNucleo ? (meuNucleo === 'asstec' ? 'notificacoes' : 'asstec') : meuNucleo);
   const somenteConsulta = publico || (!podeAlternarVisaoTotal && consultaOutroNucleo);
   const podeAlternarNucleo = !publico && !podeAlternarVisaoTotal && meuNucleo === 'asstec'; // só ASSTEC "comum" tem a toggle simples (Notificações não acessa o outro lado)
+  // "Pedido de Prioridade" é uma ferramenta só da ASSTEC — nunca aparece na
+  // consulta pública nem para quem é só do Núcleo de Notificações.
+  const podeVerPrioridade = !publico && (isMaster || podeAdministrar || meuNucleo === 'asstec');
 
   // Na DASHBOARD, cada núcleo só vê as classes que ele efetivamente movimenta
   // (estados com contagem automática de prazo — sem nenhuma ação manual — ficam
   // de fora dos cards; continuam visíveis em "Todos os Processos"). O master
   // vê tudo, inclusive as contagens automáticas, para ter visão completa.
   const ESTADOS_FORA_DO_FLUXO_PRINCIPAL = ['ar_sem_retorno_rastreio', 'ar_sem_retorno_rastreio_decisao'];
+  // Acompanhamento de TACs também sai do fluxo sequencial — vira um card
+  // próprio, ao lado do de Processos em Incidente, do qual se origina.
+  const TODOS_ESTADOS_ESPECIAIS = [...ESTADOS_FORA_DO_FLUXO_PRINCIPAL, 'acompanhamento_tacs'];
   const estadosVisiveis = Object.entries(ESTADOS_AMBIENTAL)
-    // Os estados "sem retorno/consulta de rastreio" não entram no fluxo
-    // principal — cada um tem card próprio, destacado acima do respectivo
-    // "Pendente de Retorno de AR" (ver renderização da dashboard).
-    .filter(([id, e]) => !ESTADOS_FORA_DO_FLUXO_PRINCIPAL.includes(id) && (isMaster || podeAdministrar || publico || !e.auto) && (nucleoView === 'todos' || e.nucleo === nucleoView || e.nucleo === 'ambos'))
+    // Os estados "sem retorno/consulta de rastreio" e o de Acompanhamento de
+    // TACs não entram no fluxo principal — cada um tem card próprio,
+    // destacado numa faixa especial acima do fluxo (ver dashboard).
+    .filter(([id, e]) => !TODOS_ESTADOS_ESPECIAIS.includes(id) && (isMaster || podeAdministrar || publico || !e.auto) && (nucleoView === 'todos' || e.nucleo === nucleoView || e.nucleo === 'ambos'))
     .sort((a, b) => a[1].ordem - b[1].ordem);
 
   const ativos = processos.filter((p) => !p.concluido && !p.incidente?.ativo);
@@ -982,6 +1078,85 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
         );
       }
 
+      case 'acompanhamento_tacs': {
+        const obrigacoes = p.tac?.obrigacoes || [];
+        const pendentesVencidas = obrigacoes.filter(obrigacaoVencida);
+        const pendentesNoPrazo = obrigacoes.filter((o) => o.status === 'pendente' && !obrigacaoVencida(o));
+        const resolvidas = obrigacoes.filter((o) => o.status !== 'pendente');
+
+        const iniciarDecisao = (o, decisao) => setObrigacaoEmDecisao({ id: o.id, decisao, justificativa: '', novaData: '' });
+        const confirmarDecisao = (o) => {
+          const d = obrigacaoEmDecisao;
+          if (d.decisao === 'prorrogada' && (!d.justificativa.trim() || !d.novaData)) return;
+          const extra = d.decisao === 'prorrogada' ? { justificativa: d.justificativa.trim(), novaData: d.novaData } : {};
+          const msg = d.decisao === 'cumprida' ? 'Confirma que a obrigação foi cumprida?'
+            : d.decisao === 'descumprida' ? 'Confirma que a obrigação foi descumprida?'
+            : 'Confirma a prorrogação do prazo desta obrigação?';
+          pedirConfirmacao(msg, () => marcarObrigacaoTac(p, o.id, d.decisao, extra));
+        };
+
+        const renderObrigacao = (o, forcado) => (
+          <div key={o.id} className={`info-box ${forcado ? 'pa-obrigacao-vencida' : ''}`} style={{ marginBottom: '12px' }}>
+            <label>{o.texto}</label>
+            <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+              Prazo: {o.tipoPrazo === 'dias' ? `${o.prazoDias} dia(s) da assinatura` : 'data certa'} — vence em {o.dataLimite ? new Date(o.dataLimite + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}
+            </p>
+            {o.status !== 'pendente' ? (
+              <p style={{ fontWeight: 700, color: o.status === 'cumprida' ? 'var(--accent-green, #3F8F5F)' : 'var(--accent-red, #B14C40)' }}>
+                {o.status === 'cumprida' ? '✅ Cumprida' : '❌ Descumprida'}
+              </p>
+            ) : obrigacaoEmDecisao?.id === o.id ? (
+              <div className="form-group" style={{ marginTop: '8px' }}>
+                {obrigacaoEmDecisao.decisao === 'prorrogada' && (
+                  <>
+                    <label>Justificativa da Prorrogação *</label>
+                    <textarea value={obrigacaoEmDecisao.justificativa} onChange={(e) => setObrigacaoEmDecisao({ ...obrigacaoEmDecisao, justificativa: e.target.value })} />
+                    <label style={{ marginTop: '8px', display: 'block' }}>Nova Data Limite *</label>
+                    <input type="date" value={obrigacaoEmDecisao.novaData} onChange={(e) => setObrigacaoEmDecisao({ ...obrigacaoEmDecisao, novaData: e.target.value })} />
+                  </>
+                )}
+                <div className="form-actions" style={{ marginTop: '10px' }}>
+                  <button className="btn-primary" disabled={obrigacaoEmDecisao.decisao === 'prorrogada' && (!obrigacaoEmDecisao.justificativa.trim() || !obrigacaoEmDecisao.novaData)} onClick={() => confirmarDecisao(o)}>Confirmar</button>
+                  <button className="btn-secondary" onClick={() => setObrigacaoEmDecisao(null)}>Cancelar</button>
+                </div>
+              </div>
+            ) : (
+              <div className="action-buttons" style={{ marginTop: '8px' }}>
+                <button className="btn-approve" onClick={() => iniciarDecisao(o, 'cumprida')}>✅ Cumprida</button>
+                <button className="btn-delete" onClick={() => iniciarDecisao(o, 'descumprida')}>❌ Descumprida</button>
+                <button className="btn-secondary" onClick={() => iniciarDecisao(o, 'prorrogada')}>⏳ Prorrogar</button>
+              </div>
+            )}
+          </div>
+        );
+
+        return (
+          <div>
+            <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '14px' }}>
+              TAC assinado em {p.tac?.dataAssinatura ? new Date(p.tac.dataAssinatura + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}. Quando todas as obrigações estiverem cumpridas, o processo é arquivado automaticamente.
+            </p>
+            {pendentesVencidas.length > 0 && (
+              <>
+                <label style={{ display: 'block', color: 'var(--accent-red, #B14C40)', fontWeight: 700, marginBottom: '8px' }}>⏰ Obrigações Vencidas — decisão necessária</label>
+                {pendentesVencidas.map((o) => renderObrigacao(o, true))}
+              </>
+            )}
+            {pendentesNoPrazo.length > 0 && (
+              <>
+                <label style={{ display: 'block', fontWeight: 700, marginBottom: '8px', marginTop: pendentesVencidas.length ? '18px' : 0 }}>Obrigações em Aberto</label>
+                {pendentesNoPrazo.map((o) => renderObrigacao(o, false))}
+              </>
+            )}
+            {resolvidas.length > 0 && (
+              <>
+                <label style={{ display: 'block', fontWeight: 700, marginBottom: '8px', marginTop: '18px' }}>Obrigações Resolvidas</label>
+                {resolvidas.map((o) => renderObrigacao(o, false))}
+              </>
+            )}
+          </div>
+        );
+      }
+
       case 'pendente_notificacao_decisao':
         return <button className="btn-primary" onClick={() => pedirConfirmacao('Confirma que a notificação da decisão foi enviada? O processo passará a aguardar o retorno do AR.', () => moverProcesso(p, 'pendente_retorno_ar_decisao'))}>Notificação Enviada → Aguardar Retorno de AR</button>;
 
@@ -1076,12 +1251,21 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             </div>
           )}
 
-          {!publico && incidentesAtivos.length > 0 && (nucleoView === 'todos' || nucleoView === 'asstec') && (
+          {!publico && (nucleoView === 'todos' || nucleoView === 'asstec') && (incidentesAtivos.length > 0 || contarEstado('acompanhamento_tacs').length > 0) && (
             <div className="pa-dash-grid" style={{ marginBottom: '18px' }}>
-              <div className="pa-card pa-card-incident" onClick={() => { setEstadoFiltro('__incidente__'); setView('lista'); }}>
-                <span className="pa-card-count">{incidentesAtivos.length}</span>
-                <span className="pa-card-label">🚧 Processos em Incidente (Sobrestados)</span>
-              </div>
+              {incidentesAtivos.length > 0 && (
+                <div className="pa-card pa-card-incident" onClick={() => { setEstadoFiltro('__incidente__'); setView('lista'); }}>
+                  <span className="pa-card-count">{incidentesAtivos.length}</span>
+                  <span className="pa-card-label">🚧 Processos em Incidente (Sobrestados)</span>
+                </div>
+              )}
+              {contarEstado('acompanhamento_tacs').length > 0 && (
+                <div className="pa-card pa-card-tac" onClick={() => abrirGrupo('acompanhamento_tacs')}>
+                  <span className="pa-card-count">{contarEstado('acompanhamento_tacs').length}</span>
+                  <span className="pa-card-label">📝 Acompanhamento de TACs</span>
+                  {contarTACsVencidos() > 0 && <span className="pa-card-urgent-badge">⏰ {contarTACsVencidos()} TAC{contarTACsVencidos() === 1 ? '' : 's'} com Obrigações Vencidas</span>}
+                </div>
+              )}
             </div>
           )}
 
@@ -1101,6 +1285,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
               const novos = publico ? 0 : naoVistos(id).length;
               const foraPrazo = publico ? 0 : contarForaPrazo(id);
               const urgentes = contarUrgentes(id);
+              const prioridades = podeVerPrioridade ? contarEstado(id).filter((p) => p.pedidoPrioridade).length : 0;
               const classeBlink = foraPrazo > 0 ? 'pa-card-blink-red' : (novos > 0 ? 'pa-card-blink' : '');
               const setorLabel = est.nucleo === 'asstec' ? 'ASSTEC' : est.nucleo === 'notificacoes' ? 'Núcleo de Notificação' : null;
               return (
@@ -1114,6 +1299,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                     <span className="pa-card-label">{est.label}</span>
                     {foraPrazo > 0 && <span className="pa-card-urgent-badge">⏰ {foraPrazo} processo{foraPrazo === 1 ? '' : 's'} fora do prazo</span>}
                     {urgentes > 0 && <span className="pa-card-urgent-badge">🔴 Processos urgentes: {urgentes}</span>}
+                    {prioridades > 0 && <span className="pa-card-priority-badge">⭐ Pedidos de prioridade: {prioridades}</span>}
                     {novos > 0 && <span className="pa-card-new-badge">{novos} novo{novos === 1 ? '' : 's'} processo{novos === 1 ? '' : 's'}</span>}
                   </div>
                   {idx < estadosVisiveis.length - 1 && (
@@ -1336,17 +1522,21 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
 
                 {listaExibida.map((p) => {
                   const limitePrazo = PRAZO_DIAS_POR_ESTADO[p.estado];
-                  const foraDoPrazo = !!limitePrazo && diasNoEstado(p.entradaNoEstadoEm) > limitePrazo;
+                  const foraDoPrazo = (!!limitePrazo && diasNoEstado(p.entradaNoEstadoEm) > limitePrazo) || (p.estado === 'acompanhamento_tacs' && temObrigacaoVencida(p));
+                  const mostraPrioridade = podeVerPrioridade && p.pedidoPrioridade;
                   const éNovo = estadoFiltro && estadoFiltro !== '__incidente__' && vezesVisto(p) < 3;
-                  // Prioridade visual: fora do prazo (pisca vermelho) > urgente/
-                  // atenção (amarelo) > órgão público (verde) > novo processo (pisca).
+                  // Prioridade visual: fora do prazo (pisca vermelho) > pedido de
+                  // prioridade (azul) > urgente/atenção (amarelo) > órgão público
+                  // (verde) > novo processo (pisca).
                   const marcadorClasse = foraDoPrazo
                     ? 'card-item-blink-red'
-                    : (p.urgente || p.atencao)
-                      ? 'card-item-marcado-amarelo'
-                      : p.orgaoPublico
-                        ? 'card-item-marcado-verde'
-                        : (éNovo ? 'card-item-blink' : '');
+                    : mostraPrioridade
+                      ? 'card-item-marcado-azul'
+                      : (p.urgente || p.atencao)
+                        ? 'card-item-marcado-amarelo'
+                        : p.orgaoPublico
+                          ? 'card-item-marcado-verde'
+                          : (éNovo ? 'card-item-blink' : '');
                   return (
                   <div key={p.id} className={`card-item ${marcadorClasse}`} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', flexDirection: 'column' }}>
                     {p.orgaoPublico && <span className="card-item-corner-badge">🏛️ Órgão/Ente Público</span>}
@@ -1360,9 +1550,10 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                           <strong>{p.numeroSEI}</strong>
                           <span className="badge status-pendente">{p.incidente?.ativo ? '🚧 Incidente' : ESTADOS_AMBIENTAL[p.estado]?.label}</span>
                         </div>
-                        {(foraDoPrazo || p.urgente || p.atencao) && (
+                        {(foraDoPrazo || mostraPrioridade || p.urgente || p.atencao) && (
                           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', margin: '2px 0 6px' }}>
-                            {foraDoPrazo && <span className="card-item-tag card-item-tag-atraso">⏰ Fora do Prazo</span>}
+                            {foraDoPrazo && <span className="card-item-tag card-item-tag-atraso">⏰ {p.estado === 'acompanhamento_tacs' ? 'Obrigação Vencida' : 'Fora do Prazo'}</span>}
+                            {mostraPrioridade && <span className="card-item-tag card-item-tag-prioridade">⭐ Pedido de Prioridade</span>}
                             {p.urgente && <span className="card-item-tag card-item-tag-urgente">🔴 Urgente</span>}
                             {p.atencao && <span className="card-item-tag card-item-tag-atencao">⚠️ Atenção</span>}
                           </div>
@@ -1371,7 +1562,11 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                         <p className="card-text"><strong>Parte:</strong> {p.parte}</p>
                         <p className="card-text"><strong>Autuado em:</strong> {new Date(p.dataAutuacao).toLocaleDateString('pt-BR')}</p>
                         <p className="card-text"><strong>Dias no estado atual:</strong> {diasNoEstado(p.entradaNoEstadoEm)} dia(s)</p>
-                        {foraDoPrazo && <p className="card-text" style={{ color: 'var(--accent-red, #B14C40)', fontWeight: 700 }}>⚠️ Mais de {limitePrazo} dias neste estado</p>}
+                        {foraDoPrazo && (
+                          <p className="card-text" style={{ color: 'var(--accent-red, #B14C40)', fontWeight: 700 }}>
+                            {limitePrazo ? `⚠️ Mais de ${limitePrazo} dias neste estado` : '⚠️ Há obrigação de TAC com prazo vencido'}
+                          </p>
+                        )}
                       </div>
                     </div>
                     <button className="btn-secondary" style={{ alignSelf: 'flex-start', marginTop: '4px' }} onClick={() => { setSelectedId(p.id); setView('detalhe'); }}>Ver Detalhes →</button>
@@ -1391,11 +1586,12 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             <h2>🌿 {selected.numeroSEI}</h2>
             <span className="badge status-pendente">{selected.incidente?.ativo ? '🚧 Incidente' : ESTADOS_AMBIENTAL[selected.estado]?.label}</span>
           </div>
-          {(selected.urgente || selected.atencao || selected.orgaoPublico) && (
+          {(selected.urgente || selected.atencao || selected.orgaoPublico || (podeVerPrioridade && selected.pedidoPrioridade)) && (
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', margin: '-6px 0 14px' }}>
               {selected.urgente && <span className="card-item-tag card-item-tag-urgente">🔴 Urgente</span>}
               {selected.atencao && <span className="card-item-tag card-item-tag-atencao">⚠️ Atenção</span>}
               {selected.orgaoPublico && <span className="card-item-tag card-item-tag-orgao">🏛️ Órgão/Ente Público</span>}
+              {podeVerPrioridade && selected.pedidoPrioridade && <span className="card-item-tag card-item-tag-prioridade">⭐ Pedido de Prioridade</span>}
             </div>
           )}
           <div className="info-grid">
@@ -1422,6 +1618,13 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                 onChange={(e) => { const v = e.target.checked; pedirConfirmacao(v ? 'Marcar este processo com atenção especial?' : 'Remover a marcação de atenção deste processo?', () => marcarAtencao(selected, v)); }} />
               <span>⚠️ Atenção <em>— card amarelo</em></span>
             </label>
+            {podeVerPrioridade && (
+              <label className="pa-marcador-toggle">
+                <input type="checkbox" checked={!!selected.pedidoPrioridade}
+                  onChange={(e) => { const v = e.target.checked; pedirConfirmacao(v ? 'Marcar este processo com pedido de prioridade?' : 'Remover o pedido de prioridade deste processo?', () => marcarPedidoPrioridade(selected, v)); }} />
+                <span>⭐ Pedido de Prioridade <em>— visível só para a ASSTEC, card azul</em></span>
+              </label>
+            )}
           </div>
 
           <div className="info-box">
@@ -1515,7 +1718,49 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
               {selected.incidente.observacao && <p><strong>Observação:</strong> {selected.incidente.observacao}</p>}
               <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Aberto em {new Date(selected.incidente.criadoEm).toLocaleDateString('pt-BR')} por {ALL_USERS?.[selected.incidente.criadoPor]?.nome || selected.incidente.criadoPor}</p>
               {isMaster || meuNucleo === 'asstec' ? (
-                showResolverIncidente ? (
+                showTacForm ? (
+                  <div className="form-section" style={{ marginTop: '10px' }}>
+                    <label style={{ display: 'block', marginBottom: '10px' }}>📝 TAC Firmado — Obrigações e Prazos</label>
+                    <div className="form-group">
+                      <label>Data de Assinatura do TAC *</label>
+                      <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: '2px 0 6px' }}>É a partir dela que os prazos em dias das obrigações abaixo são contados.</p>
+                      <input type="date" value={tacForm.dataAssinatura} onChange={(e) => setTacForm({ ...tacForm, dataAssinatura: e.target.value })} />
+                    </div>
+                    <label style={{ display: 'block', margin: '14px 0 8px', fontWeight: 600, fontSize: '13px' }}>Obrigações Assumidas</label>
+                    {tacForm.obrigacoes.map((o, idx) => (
+                      <div key={idx} className="pa-tac-obrigacao-row">
+                        <textarea placeholder="Descreva a obrigação..." value={o.texto} style={{ width: '100%', minHeight: '70px', resize: 'vertical' }}
+                          onChange={(e) => { const obs = [...tacForm.obrigacoes]; obs[idx] = { ...obs[idx], texto: e.target.value }; setTacForm({ ...tacForm, obrigacoes: obs }); }} />
+                        <div className="pa-tac-obrigacao-prazo">
+                          <select value={o.tipoPrazo} style={{ width: '100%', padding: '10px 8px', border: '1px solid var(--neutral-300)', borderRadius: '8px', background: 'var(--bg-card)', color: 'var(--text-primary)' }}
+                            onChange={(e) => { const obs = [...tacForm.obrigacoes]; obs[idx] = { ...obs[idx], tipoPrazo: e.target.value }; setTacForm({ ...tacForm, obrigacoes: obs }); }}>
+                            <option value="dias">Dias</option>
+                            <option value="data">Data certa</option>
+                          </select>
+                          {o.tipoPrazo === 'dias' ? (
+                            <input type="number" min="1" placeholder="Quantos dias" value={o.prazoDias} style={{ width: '100%' }}
+                              onChange={(e) => { const obs = [...tacForm.obrigacoes]; obs[idx] = { ...obs[idx], prazoDias: e.target.value }; setTacForm({ ...tacForm, obrigacoes: obs }); }} />
+                          ) : (
+                            <input type="date" value={o.dataLimite} style={{ width: '100%' }}
+                              onChange={(e) => { const obs = [...tacForm.obrigacoes]; obs[idx] = { ...obs[idx], dataLimite: e.target.value }; setTacForm({ ...tacForm, obrigacoes: obs }); }} />
+                          )}
+                          {tacForm.obrigacoes.length > 1 ? (
+                            <button type="button" className="btn-icon" title="Remover obrigação" onClick={() => setTacForm({ ...tacForm, obrigacoes: tacForm.obrigacoes.filter((_, i) => i !== idx) })}>✕</button>
+                          ) : <span />}
+                        </div>
+                      </div>
+                    ))}
+                    <button type="button" className="link-btn" onClick={() => setTacForm({ ...tacForm, obrigacoes: [...tacForm.obrigacoes, { texto: '', tipoPrazo: 'dias', prazoDias: '', dataLimite: '' }] })}>+ Adicionar obrigação</button>
+                    <div className="form-actions" style={{ marginTop: '14px' }}>
+                      <button className="btn-primary"
+                        disabled={!tacForm.dataAssinatura || !tacForm.obrigacoes.some((o) => o.texto.trim() && (o.tipoPrazo === 'dias' ? o.prazoDias : o.dataLimite))}
+                        onClick={() => pedirConfirmacao('Confirma a assinatura do TAC com as obrigações informadas? O processo seguirá para Acompanhamento de TACs.', () => firmarTAC(selected))}>
+                        Confirmar TAC Firmado
+                      </button>
+                      <button className="btn-secondary" onClick={() => setShowTacForm(false)}>Cancelar</button>
+                    </div>
+                  </div>
+                ) : showResolverIncidente ? (
                   <div className="form-section" style={{ marginTop: '10px' }}>
                     <div className="form-group"><label>Como foi resolvido?</label>
                       <select value={resolverForm.tipoResolucao} onChange={(e) => setResolverForm({ ...resolverForm, tipoResolucao: e.target.value })} style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--neutral-300)', borderRadius: '8px', background: 'var(--bg-card)', color: 'var(--text-primary)' }}>
@@ -1534,7 +1779,10 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                     </div>
                   </div>
                 ) : (
-                  <button className="btn-primary" style={{ marginTop: '10px' }} onClick={() => setShowResolverIncidente(true)}>Resolver Incidente</button>
+                  <div className="action-buttons" style={{ marginTop: '10px' }}>
+                    <button className="btn-primary" onClick={() => setShowResolverIncidente(true)}>Resolver Incidente</button>
+                    <button className="btn-secondary" onClick={() => setShowTacForm(true)}>📝 TAC Firmado</button>
+                  </div>
                 )
               ) : (
                 <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Processo sobrestado até a ASSTEC resolver o incidente.</p>
@@ -1572,12 +1820,16 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                       <button className="btn-secondary" onClick={() => setShowIncidenteModal(false)}>Cancelar</button>
                     </div>
                   </div>
-                ) : showArquivarForm ? (
+                ) : showArquivarForm && selected.estado !== 'acompanhamento_tacs' ? (
                   renderArquivarInline(selected)
                 ) : (
                   <div className="action-buttons" style={{ marginTop: '14px' }}>
                     <button className="btn-delete" onClick={() => setShowIncidenteModal(true)}>🚧 Gerar Incidente</button>
-                    <button className="btn-secondary" onClick={() => setShowArquivarForm(true)}>📁 Arquivar Processo</button>
+                    {selected.estado === 'acompanhamento_tacs' ? (
+                      <button className="btn-delete" onClick={() => pedirConfirmacao('Confirma o descumprimento do TAC? O processo seguirá para Cobrança Administrativa Ativa.', () => moverProcesso(selected, 'cobranca_administrativa', 'manual', { prazo: { inicio: toISODate(new Date()), fim: toISODate(addMeses(new Date(), 3)), origem: 'cobranca_administrativa' } }))}>⚖️ Confirmar Descumprimento de TAC</button>
+                    ) : (
+                      <button className="btn-secondary" onClick={() => setShowArquivarForm(true)}>📁 Arquivar Processo</button>
+                    )}
                   </div>
                 )
               )}
