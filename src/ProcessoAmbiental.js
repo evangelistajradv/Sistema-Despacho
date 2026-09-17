@@ -197,7 +197,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const [ordem, setOrdem] = useState('antigo'); // antigo | recente
   const [nucleoFiltro, setNucleoFiltro] = useState('todos');
   const [mostrarConcluidos, setMostrarConcluidos] = useState(false);
-  const [novo, setNovo] = useState({ numeroSEI: '', parte: '', cpfCnpj: '', valorMulta: '', autoInfracao: '', termoSancao: '', enderecos: [], descricaoInfracao: '' });
+  const [novo, setNovo] = useState({ numeroSEI: '', parte: '', cpfCnpj: '', valorMulta: '', autoInfracao: '', termoSancao: '', enderecos: [], descricaoInfracao: '', observacaoInicial: '', urgenteInicial: false, orgaoPublicoInicial: false, atencaoInicial: false, pedidoPrioridadeInicial: false });
   const [dataInput, setDataInput] = useState('');
   const [novoEndereco, setNovoEndereco] = useState({ logradouro: '', numero: '', bairro: '', cep: '', cidade: '', uf: '', complemento: '' });
   // Texto livre do "AR Não Cumprido" (pesquisa de novo endereço do
@@ -660,6 +660,12 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           termoSancao: novo.termoSancao.trim(),
           enderecos: novo.enderecos,
           descricaoInfracao: novo.descricaoInfracao.trim(),
+          observacao: novo.observacaoInicial.trim(),
+          urgente: novo.urgenteInicial,
+          urgenteDesde: novo.urgenteInicial ? new Date().toISOString() : null,
+          orgaoPublico: novo.orgaoPublicoInicial,
+          atencao: novo.atencaoInicial,
+          pedidoPrioridade: podeVerPrioridade ? novo.pedidoPrioridadeInicial : false,
           estado: estadoInicial,
           dataAutuacao: new Date().toISOString().slice(0, 10),
           entradaNoEstadoEm: new Date().toISOString(),
@@ -679,7 +685,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       return;
     }
 
-    setNovo({ numeroSEI: '', parte: '', cpfCnpj: '', valorMulta: '', autoInfracao: '', termoSancao: '', enderecos: [], descricaoInfracao: '' });
+    setNovo({ numeroSEI: '', parte: '', cpfCnpj: '', valorMulta: '', autoInfracao: '', termoSancao: '', enderecos: [], descricaoInfracao: '', observacaoInicial: '', urgenteInicial: false, orgaoPublicoInicial: false, atencaoInicial: false, pedidoPrioridadeInicial: false });
     setNovoEndereco({ logradouro: '', numero: '', bairro: '', cep: '', cidade: '', uf: '', complemento: '' });
     setEstadoNovoProcesso('');
     setDataInicioPrazoMaster('');
@@ -1352,6 +1358,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           <div className="form-group"><label>CPF/CNPJ</label>
             <input type="text" placeholder="000.000.000-00 ou 00.000.000/0000-00" value={novo.cpfCnpj} onChange={(e) => setNovo({ ...novo, cpfCnpj: e.target.value })} />
           </div>
+          <div className="form-group"><label>Descrição da Infração</label>
+            <textarea placeholder="Descreva os detalhes da infração..." value={novo.descricaoInfracao} onChange={(e) => setNovo({ ...novo, descricaoInfracao: e.target.value })} style={{ minHeight: '100px', resize: 'vertical' }} />
+          </div>
           <div className="form-group"><label>Valor da Multa (R$)</label>
             <input type="text" placeholder="0,00" value={novo.valorMulta} onChange={(e) => setNovo({ ...novo, valorMulta: e.target.value })} />
           </div>
@@ -1446,8 +1455,32 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             )}
           </div>
 
-          <div className="form-group"><label>Descrição da Infração</label>
-            <textarea placeholder="Descreva os detalhes da infração..." value={novo.descricaoInfracao} onChange={(e) => setNovo({ ...novo, descricaoInfracao: e.target.value })} style={{ minHeight: '100px', resize: 'vertical' }} />
+          <hr style={{ margin: '20px 0', border: '1px solid var(--neutral-200)' }} />
+          <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: '0 0 14px' }}>🏷️ Marcadores e Observações (opcionais)</p>
+
+          <div className="form-group"><label>Observações</label>
+            <textarea placeholder="Anotações gerais sobre o processo..." value={novo.observacaoInicial} onChange={(e) => setNovo({ ...novo, observacaoInicial: e.target.value })} />
+          </div>
+
+          <div className="info-box pa-marcadores-box" style={{ marginBottom: '16px' }}>
+            <label className="pa-marcador-toggle">
+              <input type="checkbox" checked={novo.urgenteInicial} onChange={(e) => setNovo({ ...novo, urgenteInicial: e.target.checked })} />
+              <span>🔴 Urgente <em>— aparece no topo da lista, card amarelo</em></span>
+            </label>
+            <label className="pa-marcador-toggle">
+              <input type="checkbox" checked={novo.orgaoPublicoInicial} onChange={(e) => setNovo({ ...novo, orgaoPublicoInicial: e.target.checked })} />
+              <span>🏛️ Órgão/Ente Público <em>— card verde</em></span>
+            </label>
+            <label className="pa-marcador-toggle">
+              <input type="checkbox" checked={novo.atencaoInicial} onChange={(e) => setNovo({ ...novo, atencaoInicial: e.target.checked })} />
+              <span>⚠️ Atenção <em>— card amarelo</em></span>
+            </label>
+            {podeVerPrioridade && (
+              <label className="pa-marcador-toggle">
+                <input type="checkbox" checked={novo.pedidoPrioridadeInicial} onChange={(e) => setNovo({ ...novo, pedidoPrioridadeInicial: e.target.checked })} />
+                <span>⭐ Pedido de Prioridade <em>— visível só para a ASSTEC, card azul</em></span>
+              </label>
+            )}
           </div>
 
           <div className="form-actions">
