@@ -197,7 +197,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const [ordem, setOrdem] = useState('antigo'); // antigo | recente
   const [nucleoFiltro, setNucleoFiltro] = useState('todos');
   const [mostrarConcluidos, setMostrarConcluidos] = useState(false);
-  const [novo, setNovo] = useState({ numeroSEI: '', parte: '', valorMulta: '', autoInfracao: '', termoSancao: '', enderecos: [], descricaoInfracao: '' });
+  const [novo, setNovo] = useState({ numeroSEI: '', parte: '', cpfCnpj: '', valorMulta: '', autoInfracao: '', termoSancao: '', enderecos: [], descricaoInfracao: '' });
   const [dataInput, setDataInput] = useState('');
   const [novoEndereco, setNovoEndereco] = useState({ logradouro: '', numero: '', bairro: '', cep: '', cidade: '', uf: '', complemento: '' });
   // Texto livre do "AR Não Cumprido" (pesquisa de novo endereço do
@@ -225,7 +225,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const [estadoNovoProcesso, setEstadoNovoProcesso] = useState('');
   const [observacaoInput, setObservacaoInput] = useState('');
   const [editandoInfo, setEditandoInfo] = useState(false);
-  const [editForm, setEditForm] = useState({ numeroSEI: '', parte: '', valorMulta: '' });
+  const [editForm, setEditForm] = useState({ numeroSEI: '', parte: '', cpfCnpj: '', valorMulta: '' });
   const [showArNaoCumpridoForm, setShowArNaoCumpridoForm] = useState(false);
   const [semNovoEndereco, setSemNovoEndereco] = useState(false);
   const [showArquivarForm, setShowArquivarForm] = useState(false);
@@ -537,6 +537,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             numeroSEI: numeroSEITrim,
             numeroSEIDigits: novosDigits,
             parte: editForm.parte.trim(),
+            cpfCnpj: editForm.cpfCnpj.trim(),
             valorMulta: parseMoeda(editForm.valorMulta),
           });
         });
@@ -545,6 +546,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           numeroSEI: numeroSEITrim,
           numeroSEIDigits: novosDigits,
           parte: editForm.parte.trim(),
+          cpfCnpj: editForm.cpfCnpj.trim(),
           valorMulta: parseMoeda(editForm.valorMulta),
         });
       }
@@ -652,6 +654,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           numeroSEI: numeroSEITrim,
           numeroSEIDigits,
           parte: novo.parte.trim(),
+          cpfCnpj: novo.cpfCnpj.trim(),
           valorMulta: parseMoeda(novo.valorMulta),
           autoInfracao: novo.autoInfracao.trim(),
           termoSancao: novo.termoSancao.trim(),
@@ -676,7 +679,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       return;
     }
 
-    setNovo({ numeroSEI: '', parte: '', valorMulta: '', autoInfracao: '', termoSancao: '', enderecos: [], descricaoInfracao: '' });
+    setNovo({ numeroSEI: '', parte: '', cpfCnpj: '', valorMulta: '', autoInfracao: '', termoSancao: '', enderecos: [], descricaoInfracao: '' });
     setNovoEndereco({ logradouro: '', numero: '', bairro: '', cep: '', cidade: '', uf: '', complemento: '' });
     setEstadoNovoProcesso('');
     setDataInicioPrazoMaster('');
@@ -845,7 +848,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const buscaDigits = onlyDigits(busca);
   const filtrarBusca = (lista) => {
     if (!busca.trim()) return lista;
-    return lista.filter((p) => (buscaDigits && p.numeroSEIDigits?.includes(buscaDigits)) || p.parte?.toLowerCase().includes(busca.trim().toLowerCase()));
+    return lista.filter((p) => (buscaDigits && (p.numeroSEIDigits?.includes(buscaDigits) || onlyDigits(p.cpfCnpj).includes(buscaDigits))) || p.parte?.toLowerCase().includes(busca.trim().toLowerCase()));
   };
 
   const contarEstado = (id) => ativos.filter((p) => p.estado === id);
@@ -1346,6 +1349,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           <div className="form-group"><label>Nome da Parte *</label>
             <input type="text" value={novo.parte} onChange={(e) => setNovo({ ...novo, parte: e.target.value })} />
           </div>
+          <div className="form-group"><label>CPF/CNPJ</label>
+            <input type="text" placeholder="000.000.000-00 ou 00.000.000/0000-00" value={novo.cpfCnpj} onChange={(e) => setNovo({ ...novo, cpfCnpj: e.target.value })} />
+          </div>
           <div className="form-group"><label>Valor da Multa (R$)</label>
             <input type="text" placeholder="0,00" value={novo.valorMulta} onChange={(e) => setNovo({ ...novo, valorMulta: e.target.value })} />
           </div>
@@ -1596,6 +1602,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           )}
           <div className="info-grid">
             <div className="info-item"><label>Parte</label><p>{selected.parte}</p></div>
+            {selected.cpfCnpj && <div className="info-item"><label>CPF/CNPJ</label><p>{selected.cpfCnpj}</p></div>}
             <div className="info-item"><label>Valor da Multa</label><p>{fmtMoeda(selected.valorMulta)}</p></div>
             <div className="info-item"><label>Data de Autuação</label><p>{new Date(selected.dataAutuacao).toLocaleDateString('pt-BR')}</p></div>
             <div className="info-item"><label>Dias no Estado Atual</label><p>{diasNoEstado(selected.entradaNoEstadoEm)} dia(s)</p></div>
@@ -1646,6 +1653,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                   <div className="form-group"><label>Nome da Parte</label>
                     <input type="text" value={editForm.parte} onChange={(e) => setEditForm({ ...editForm, parte: e.target.value })} />
                   </div>
+                  <div className="form-group"><label>CPF/CNPJ</label>
+                    <input type="text" placeholder="000.000.000-00 ou 00.000.000/0000-00" value={editForm.cpfCnpj} onChange={(e) => setEditForm({ ...editForm, cpfCnpj: e.target.value })} />
+                  </div>
                   <div className="form-group"><label>Valor da Multa (R$)</label>
                     <input type="text" value={editForm.valorMulta} onChange={(e) => setEditForm({ ...editForm, valorMulta: e.target.value })} />
                   </div>
@@ -1655,7 +1665,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                   </div>
                 </>
               ) : (
-                <button className="btn-secondary" onClick={() => { setEditForm({ numeroSEI: selected.numeroSEI, parte: selected.parte, valorMulta: String(selected.valorMulta || '') }); setEditandoInfo(true); }}>
+                <button className="btn-secondary" onClick={() => { setEditForm({ numeroSEI: selected.numeroSEI, parte: selected.parte, cpfCnpj: selected.cpfCnpj || '', valorMulta: String(selected.valorMulta || '') }); setEditandoInfo(true); }}>
                   Editar Informações
                 </button>
               )}
