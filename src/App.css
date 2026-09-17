@@ -3939,6 +3939,16 @@ button, input, select, textarea {
   color: var(--primary-main);
 }
 
+.pa-card-subjudice {
+  border-color: var(--accent-red, #B14C40);
+  border-width: 2px;
+  animation: pa-blink-red 1.4s infinite;
+}
+
+.pa-card-subjudice .pa-card-count {
+  color: var(--accent-red, #B14C40);
+}
+
 .pa-card-priority-badge {
   font-size: 11px;
   font-weight: 700;
@@ -4199,10 +4209,22 @@ button, input, select, textarea {
   background: #2E5AAC;
 }
 
-.card-item-corner-badge {
+.card-item-tag-subjudice {
+  color: #fff;
+  background: var(--accent-red, #B14C40);
+}
+
+.card-item-corner-badges {
   position: absolute;
   top: 14px;
   right: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+}
+
+.card-item-corner-badge {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.02em;
@@ -4211,6 +4233,10 @@ button, input, select, textarea {
   border-radius: 20px;
   padding: 4px 11px;
   white-space: nowrap;
+}
+
+.card-item-corner-badge-subjudice {
+  background: var(--accent-red, #B14C40);
 }
 
 .card-item-tag {

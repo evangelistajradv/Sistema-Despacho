@@ -213,6 +213,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   // Ao marcar uma obrigação vencida (cumprida/descumprida/prorrogada), qual
   // está em edição — só uma por vez, para exigir a justificativa da prorrogação.
   const [obrigacaoEmDecisao, setObrigacaoEmDecisao] = useState(null); // { id, decisao, justificativa, novaData }
+  // Ao marcar "Sub Judice", exige informar o número do PJE antes de salvar.
+  const [showSubJudiceForm, setShowSubJudiceForm] = useState(false);
+  const [subJudiceForm, setSubJudiceForm] = useState({ numeroPJE: '', observacao: '' });
   const [showResolverIncidente, setShowResolverIncidente] = useState(false);
   const [resolverForm, setResolverForm] = useState({ tipoResolucao: '', observacao: '' });
   const [confirmAction, setConfirmAction] = useState(null); // { mensagem, onConfirm }
@@ -294,6 +297,8 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     setShowTacForm(false);
     setTacForm({ dataAssinatura: '', obrigacoes: [{ texto: '', tipoPrazo: 'dias', prazoDias: '', dataLimite: '' }] });
     setObrigacaoEmDecisao(null);
+    setShowSubJudiceForm(false);
+    setSubJudiceForm({ numeroPJE: '', observacao: '' });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
@@ -814,6 +819,15 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     await updateDoc(doc(db, 'processosAmbientais', p.id), { pedidoPrioridade: valor });
   };
 
+  // Sub Judice: o processo segue seu trâmite normal, mas fica marcado (card
+  // pisca em vermelho, com selo no canto) e some do card especial assim que
+  // desmarcado. Marcar exige o número do PJE; a observação é opcional.
+  const marcarSubJudice = async (p, valor, dados = {}) => {
+    await updateDoc(doc(db, 'processosAmbientais', p.id), valor
+      ? { subJudice: true, numeroPJE: (dados.numeroPJE || '').trim(), observacaoSubJudice: (dados.observacao || '').trim() }
+      : { subJudice: false, numeroPJE: '', observacaoSubJudice: '' });
+  };
+
   // ─── Visibilidade por núcleo ──────────────────────────────────────
   // Master e quem tem "Admin. Ambiental Total" podem alternar livremente
   // entre Visão Total, ASSTEC e Notificações — por padrão, veem o setor a
@@ -850,6 +864,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   // Exibido no topo da tela, inclusive na consulta pública.
   const totalTramitando = processos.filter((p) => p.estado !== 'arquivado').length;
   const incidentesAtivos = processos.filter((p) => p.incidente?.ativo);
+  // Sub Judice não é um estado exclusivo — o processo continua seu trâmite
+  // normal e, ao mesmo tempo, aparece marcado no card especial da dashboard.
+  const subJudiceAtivos = processos.filter((p) => p.subJudice && !p.concluido);
 
   const buscaDigits = onlyDigits(busca);
   const filtrarBusca = (lista) => {
@@ -1260,12 +1277,18 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             </div>
           )}
 
-          {!publico && (nucleoView === 'todos' || nucleoView === 'asstec') && (incidentesAtivos.length > 0 || contarEstado('acompanhamento_tacs').length > 0) && (
+          {!publico && (nucleoView === 'todos' || nucleoView === 'asstec') && (incidentesAtivos.length > 0 || subJudiceAtivos.length > 0 || contarEstado('acompanhamento_tacs').length > 0) && (
             <div className="pa-dash-grid" style={{ marginBottom: '18px' }}>
               {incidentesAtivos.length > 0 && (
                 <div className="pa-card pa-card-incident" onClick={() => { setEstadoFiltro('__incidente__'); setView('lista'); }}>
                   <span className="pa-card-count">{incidentesAtivos.length}</span>
                   <span className="pa-card-label">🚧 Processos em Incidente (Sobrestados)</span>
+                </div>
+              )}
+              {subJudiceAtivos.length > 0 && (
+                <div className="pa-card pa-card-subjudice" onClick={() => { setEstadoFiltro('__subjudice__'); setView('lista'); }}>
+                  <span className="pa-card-count">{subJudiceAtivos.length}</span>
+                  <span className="pa-card-label">⚖️ Processos Sub Judice</span>
                 </div>
               )}
               {contarEstado('acompanhamento_tacs').length > 0 && (
@@ -1493,7 +1516,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       {view === 'lista' && (
         <div className="list-view">
           <div className="list-header">
-            <h3>{estadoFiltro === '__incidente__' ? '🚧 Processos em Incidente' : estadoFiltro ? ESTADOS_AMBIENTAL[estadoFiltro]?.label : 'Todos os Processos'}</h3>
+            <h3>{estadoFiltro === '__incidente__' ? '🚧 Processos em Incidente' : estadoFiltro === '__subjudice__' ? '⚖️ Processos Sub Judice' : estadoFiltro ? ESTADOS_AMBIENTAL[estadoFiltro]?.label : 'Todos os Processos'}</h3>
             <div className="header-buttons">
               <button className="btn-settings" onClick={() => setView('dashboard')}>← Voltar à Dashboard</button>
             </div>
@@ -1526,7 +1549,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           )}
 
           {(() => {
-            const listaExibida = estadoFiltro === '__incidente__' ? filtrarBusca(incidentesAtivos) : listaAtual();
+            const listaExibida = estadoFiltro === '__incidente__' ? filtrarBusca(incidentesAtivos) : estadoFiltro === '__subjudice__' ? filtrarBusca(subJudiceAtivos) : listaAtual();
             const podeLote = (isMaster || podeAdministrar) && !estadoFiltro;
 
             if (listaExibida.length === 0) return <p className="empty-state">Nenhum processo encontrado</p>;
@@ -1562,12 +1585,13 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                 {listaExibida.map((p) => {
                   const limitePrazo = PRAZO_DIAS_POR_ESTADO[p.estado];
                   const foraDoPrazo = (!!limitePrazo && diasNoEstado(p.entradaNoEstadoEm) > limitePrazo) || (p.estado === 'acompanhamento_tacs' && temObrigacaoVencida(p));
+                  const emBlinkVermelho = foraDoPrazo || p.subJudice;
                   const mostraPrioridade = podeVerPrioridade && p.pedidoPrioridade;
-                  const éNovo = estadoFiltro && estadoFiltro !== '__incidente__' && vezesVisto(p) < 3;
-                  // Prioridade visual: fora do prazo (pisca vermelho) > pedido de
-                  // prioridade (azul) > urgente/atenção (amarelo) > órgão público
-                  // (verde) > novo processo (pisca).
-                  const marcadorClasse = foraDoPrazo
+                  const éNovo = estadoFiltro && estadoFiltro !== '__incidente__' && estadoFiltro !== '__subjudice__' && vezesVisto(p) < 3;
+                  // Prioridade visual: fora do prazo/Sub Judice (pisca vermelho) >
+                  // pedido de prioridade (azul) > urgente/atenção (amarelo) >
+                  // órgão público (verde) > novo processo (pisca).
+                  const marcadorClasse = emBlinkVermelho
                     ? 'card-item-blink-red'
                     : mostraPrioridade
                       ? 'card-item-marcado-azul'
@@ -1578,7 +1602,12 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                           : (éNovo ? 'card-item-blink' : '');
                   return (
                   <div key={p.id} className={`card-item ${marcadorClasse}`} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', flexDirection: 'column' }}>
-                    {p.orgaoPublico && <span className="card-item-corner-badge">🏛️ Órgão/Ente Público</span>}
+                    {(p.orgaoPublico || p.subJudice) && (
+                      <div className="card-item-corner-badges">
+                        {p.subJudice && <span className="card-item-corner-badge card-item-corner-badge-subjudice">⚖️ Sub Judice</span>}
+                        {p.orgaoPublico && <span className="card-item-corner-badge">🏛️ Órgão/Ente Público</span>}
+                      </div>
+                    )}
                     <div style={{ display: 'flex', gap: '10px', width: '100%' }}>
                       {podeLote && (
                         <input type="checkbox" checked={selecionados.has(p.id)} onChange={() => toggleSelecionado(p.id)}
@@ -1606,6 +1635,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                             {limitePrazo ? `⚠️ Mais de ${limitePrazo} dias neste estado` : '⚠️ Há obrigação de TAC com prazo vencido'}
                           </p>
                         )}
+                        {p.subJudice && (
+                          <p className="card-text" style={{ color: 'var(--accent-red, #B14C40)', fontWeight: 700 }}>⚖️ Sub Judice — PJE {p.numeroPJE || 'não informado'}</p>
+                        )}
                       </div>
                     </div>
                     <button className="btn-secondary" style={{ alignSelf: 'flex-start', marginTop: '4px' }} onClick={() => { setSelectedId(p.id); setView('detalhe'); }}>Ver Detalhes →</button>
@@ -1625,8 +1657,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             <h2>🌿 {selected.numeroSEI}</h2>
             <span className="badge status-pendente">{selected.incidente?.ativo ? '🚧 Incidente' : ESTADOS_AMBIENTAL[selected.estado]?.label}</span>
           </div>
-          {(selected.urgente || selected.atencao || selected.orgaoPublico || (podeVerPrioridade && selected.pedidoPrioridade)) && (
+          {(selected.urgente || selected.atencao || selected.orgaoPublico || selected.subJudice || (podeVerPrioridade && selected.pedidoPrioridade)) && (
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', margin: '-6px 0 14px' }}>
+              {selected.subJudice && <span className="card-item-tag card-item-tag-subjudice">⚖️ Sub Judice{selected.numeroPJE ? ` — PJE ${selected.numeroPJE}` : ''}</span>}
               {selected.urgente && <span className="card-item-tag card-item-tag-urgente">🔴 Urgente</span>}
               {selected.atencao && <span className="card-item-tag card-item-tag-atencao">⚠️ Atenção</span>}
               {selected.orgaoPublico && <span className="card-item-tag card-item-tag-orgao">🏛️ Órgão/Ente Público</span>}
@@ -1664,6 +1697,38 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                   onChange={(e) => { const v = e.target.checked; pedirConfirmacao(v ? 'Marcar este processo com pedido de prioridade?' : 'Remover o pedido de prioridade deste processo?', () => marcarPedidoPrioridade(selected, v)); }} />
                 <span>⭐ Pedido de Prioridade <em>— visível só para a ASSTEC, card azul</em></span>
               </label>
+            )}
+            <label className="pa-marcador-toggle">
+              <input type="checkbox" checked={!!selected.subJudice}
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    setSubJudiceForm({ numeroPJE: selected.numeroPJE || '', observacao: selected.observacaoSubJudice || '' });
+                    setShowSubJudiceForm(true);
+                  } else {
+                    pedirConfirmacao('Remover a marcação de Sub Judice deste processo?', () => marcarSubJudice(selected, false));
+                  }
+                }} />
+              <span>⚖️ Sub Judice <em>— card pisca em vermelho, com o número do PJE</em></span>
+            </label>
+            {selected.subJudice && !showSubJudiceForm && (
+              <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: '2px 0 8px' }}>
+                PJE: <strong>{selected.numeroPJE || 'não informado'}</strong>{selected.observacaoSubJudice ? ` — ${selected.observacaoSubJudice}` : ''}
+              </p>
+            )}
+            {showSubJudiceForm && (
+              <div className="form-group" style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--border-color)' }}>
+                <label>Número do PJE *</label>
+                <input type="text" placeholder="Ex: 0801234-56.2026.8.18.0000" value={subJudiceForm.numeroPJE} onChange={(e) => setSubJudiceForm({ ...subJudiceForm, numeroPJE: e.target.value })} />
+                <label style={{ marginTop: '8px', display: 'block' }}>Observação (opcional)</label>
+                <textarea value={subJudiceForm.observacao} onChange={(e) => setSubJudiceForm({ ...subJudiceForm, observacao: e.target.value })} />
+                <div className="form-actions" style={{ marginTop: '10px' }}>
+                  <button className="btn-primary" disabled={!subJudiceForm.numeroPJE.trim()}
+                    onClick={() => pedirConfirmacao('Confirma a marcação deste processo como Sub Judice?', () => { marcarSubJudice(selected, true, subJudiceForm); setShowSubJudiceForm(false); })}>
+                    Confirmar
+                  </button>
+                  <button className="btn-secondary" onClick={() => setShowSubJudiceForm(false)}>Cancelar</button>
+                </div>
+              </div>
             )}
           </div>
 
