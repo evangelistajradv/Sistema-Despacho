@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase-config';
-import { collection, onSnapshot, doc, updateDoc, arrayUnion, getDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, updateDoc, arrayUnion, getDoc } from 'firebase/firestore';
 
 // Central de Notificações (sino) — lê as notificações persistidas no Firebase.
 // Como as notificações ficam no banco, elas aparecem aqui mesmo quando chegaram
@@ -22,13 +22,19 @@ export default function NotificationCenter({
 
   useEffect(() => {
     if (!currentUser) return;
+    // Filtra por audiência já na consulta (todo criador de notificação sempre
+    // preenche "audience") — em vez de trazer a coleção inteira e descartar no
+    // cliente o que não é deste usuário. Cresce sem limite com o tempo (uma
+    // notificação por evento do sistema, sem rotina de limpeza), então restringir
+    // a consulta ao que realmente interessa a cada usuário economiza leitura e
+    // tráfego de verdade — diferente da dashboard do Processo Ambiental (poucas
+    // centenas de documentos), aqui o crescimento é ilimitado.
+    const q = query(collection(db, 'notificacoes'), where('audience', 'array-contains', currentUser));
     const unsub = onSnapshot(
-      collection(db, 'notificacoes'),
+      q,
       (snap) => {
         const all = snap.docs
           .map((d) => ({ id: d.id, ...d.data() }))
-          // só notificações destinadas a este usuário e não "limpas" por ele
-          .filter((n) => (!n.audience || n.audience.includes(currentUser)))
           .filter((n) => !(n.clearedBy || []).includes(currentUser))
           .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
           .slice(0, 100);

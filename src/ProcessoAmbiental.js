@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { db } from './firebase-config';
-import { collection, doc, updateDoc, deleteDoc, onSnapshot, runTransaction } from 'firebase/firestore';
+import { collection, doc, updateDoc, deleteDoc, onSnapshot, runTransaction, writeBatch } from 'firebase/firestore';
 
 // ═══════════════════════════════════════════════════════════════════
 // PROCESSO ADMINISTRATIVO AMBIENTAL — módulo separado e autônomo do
@@ -195,6 +195,10 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const [consultaOutroNucleo, setConsultaOutroNucleo] = useState(false);
   const [busca, setBusca] = useState('');
   const [ordem, setOrdem] = useState('antigo'); // antigo | recente
+  // Paginação da lista de processos: renderizar centenas de cards de uma vez
+  // deixa a página pesada para rolar/interagir. Mostra aos poucos, com
+  // "Carregar mais" — reseta sempre que o filtro/busca/ordenação muda.
+  const [quantidadeExibida, setQuantidadeExibida] = useState(60);
   const [nucleoFiltro, setNucleoFiltro] = useState('todos');
   const [mostrarConcluidos, setMostrarConcluidos] = useState(false);
   const [novo, setNovo] = useState({ numeroSEI: '', parte: '', cpfCnpj: '', valorMulta: '', autoInfracao: '', termoSancao: '', enderecos: [], descricaoInfracao: '', observacaoInicial: '', urgenteInicial: false, orgaoPublicoInicial: false, atencaoInicial: false, pedidoPrioridadeInicial: false });
@@ -313,12 +317,22 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     });
   };
 
+  // "processosRef" guarda a lista mais recente sem forçar o efeito abaixo a
+  // reiniciar seu intervalo a cada gravação de qualquer usuário no banco —
+  // antes, como o efeito dependia de "processos" diretamente, ele reavaliava
+  // TODOS os processos a cada escrita de QUALQUER pessoa no sistema (não só a
+  // cada hora como pretendido), multiplicando o trabalho com muitos usuários
+  // conectados e arriscando gravações duplicadas quando duas pessoas
+  // detectavam o mesmo processo vencido ao mesmo tempo.
+  const processosRef = useRef(processos);
+  useEffect(() => { processosRef.current = processos; }, [processos]);
+
   // Verificação periódica de prazos automáticos (dispara migração ao vencer)
   useEffect(() => {
     if (publico) return; // consulta pública é só leitura, nunca movimenta processos
     const checar = () => {
       const agora = new Date();
-      processos.forEach((p) => {
+      processosRef.current.forEach((p) => {
         if (p.concluido || p.incidente?.ativo) return;
         const est = ESTADOS_AMBIENTAL[p.estado];
         if (est?.auto && p.prazo?.fim && new Date(p.prazo.fim + 'T23:59:59') <= agora) {
@@ -338,7 +352,11 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     const interval = setInterval(checar, 60 * 60 * 1000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [processos, publico]);
+  }, [publico]);
+
+  useEffect(() => {
+    setQuantidadeExibida(60);
+  }, [estadoFiltro, busca, ordem, nucleoFiltro, mostrarConcluidos, view]);
 
   const iniciarPrazo = (p, campoData, valor, estadoDestino) => {
     const { inicio, fim } = calcularPrazo20Dias(valor);
@@ -859,14 +877,17 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     .filter(([id, e]) => !TODOS_ESTADOS_ESPECIAIS.includes(id) && (isMaster || podeAdministrar || publico || !e.auto) && (nucleoView === 'todos' || e.nucleo === nucleoView || e.nucleo === 'ambos'))
     .sort((a, b) => a[1].ordem - b[1].ordem);
 
-  const ativos = processos.filter((p) => !p.concluido && !p.incidente?.ativo);
+  // Memoizados: com centenas de processos, recalcular esses filtros do zero a
+  // cada renderização (o que acontecia antes) deixava a tela visivelmente
+  // lenta. Agora só recalculam quando a lista de processos realmente muda.
+  const ativos = useMemo(() => processos.filter((p) => !p.concluido && !p.incidente?.ativo), [processos]);
   // Total de processos em tramitação — todos os estados, exceto arquivados.
   // Exibido no topo da tela, inclusive na consulta pública.
-  const totalTramitando = processos.filter((p) => p.estado !== 'arquivado').length;
-  const incidentesAtivos = processos.filter((p) => p.incidente?.ativo);
+  const totalTramitando = useMemo(() => processos.filter((p) => p.estado !== 'arquivado').length, [processos]);
+  const incidentesAtivos = useMemo(() => processos.filter((p) => p.incidente?.ativo), [processos]);
   // Sub Judice não é um estado exclusivo — o processo continua seu trâmite
   // normal e, ao mesmo tempo, aparece marcado no card especial da dashboard.
-  const subJudiceAtivos = processos.filter((p) => p.subJudice && !p.concluido);
+  const subJudiceAtivos = useMemo(() => processos.filter((p) => p.subJudice && !p.concluido), [processos]);
 
   const buscaDigits = onlyDigits(busca);
   const filtrarBusca = (lista) => {
@@ -874,7 +895,20 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     return lista.filter((p) => (buscaDigits && (p.numeroSEIDigits?.includes(buscaDigits) || onlyDigits(p.cpfCnpj).includes(buscaDigits))) || p.parte?.toLowerCase().includes(busca.trim().toLowerCase()));
   };
 
-  const contarEstado = (id) => ativos.filter((p) => p.estado === id);
+  // Agrupa os processos ativos por estado numa única passada. Antes, cada um
+  // dos ~20 cards da dashboard chamava contarEstado()/naoVistos()/
+  // contarForaPrazo()/contarUrgentes() separadamente, cada função percorrendo
+  // a lista inteira de processos ativos de novo — com centenas de processos,
+  // isso multiplicava por 4-5x, por card, a cada renderização. Agora cada
+  // estado só filtra dentro do seu próprio grupo, bem menor.
+  const processosPorEstado = useMemo(() => {
+    const mapa = {};
+    for (const p of ativos) {
+      (mapa[p.estado] || (mapa[p.estado] = [])).push(p);
+    }
+    return mapa;
+  }, [ativos]);
+  const contarEstado = (id) => processosPorEstado[id] || [];
   const nucleoDoEstado = (id) => (ESTADOS_AMBIENTAL[id].nucleo === 'ambos' ? meuNucleo : ESTADOS_AMBIENTAL[id].nucleo);
   // Cada pessoa tem seu próprio contador de acessos (vistoPor.<usuário>).
   // O card do ESTADO (dashboard) só pisca até o 1º acesso (contador === 0).
@@ -903,12 +937,25 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     setView('lista');
     if (somenteConsulta) return;
     const pendentes = contarEstado(estadoId).filter((p) => vezesVisto(p) < 3);
-    for (const p of pendentes) {
-      await updateDoc(doc(db, 'processosAmbientais', p.id), { [`vistoPor.${currentUser}`]: vezesVisto(p) + 1 });
+    if (pendentes.length === 0) return;
+    // Grava em lote em vez de uma chamada sequencial (aguardada) por processo
+    // — com um estado de centenas de processos "não vistos", isso travava a
+    // tela por vários segundos e multiplicava o número de escritas cobradas
+    // no Firestore. writeBatch aceita até 500 operações por lote.
+    const CHUNK = 450;
+    for (let i = 0; i < pendentes.length; i += CHUNK) {
+      const lote = writeBatch(db);
+      pendentes.slice(i, i + CHUNK).forEach((p) => {
+        lote.update(doc(db, 'processosAmbientais', p.id), { [`vistoPor.${currentUser}`]: vezesVisto(p) + 1 });
+      });
+      await lote.commit();
     }
   };
 
-  const listaAtual = () => {
+  // Memoizado: filtrar + ordenar a lista completa a cada renderização (mesmo
+  // sem nenhum filtro mudar) era um dos pontos que deixava a tela lenta com
+  // muitos processos.
+  const listaAtual = useMemo(() => {
     let lista = mostrarConcluidos ? processos.filter((p) => !p.incidente?.ativo) : ativos;
     // "Todos os Processos" (sem filtro por estado) também deve trazer os
     // processos em incidente — mas só para quem enxerga o lado da ASSTEC
@@ -930,7 +977,8 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
         : new Date(b.dataAutuacao) - new Date(a.dataAutuacao);
     });
     return lista;
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [processos, ativos, incidentesAtivos, mostrarConcluidos, estadoFiltro, nucleoView, nucleoFiltro, busca, ordem]);
 
   const nomeUsuario = ALL_USERS?.[currentUser]?.nome || currentUser;
 
@@ -1549,7 +1597,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           )}
 
           {(() => {
-            const listaExibida = estadoFiltro === '__incidente__' ? filtrarBusca(incidentesAtivos) : estadoFiltro === '__subjudice__' ? filtrarBusca(subJudiceAtivos) : listaAtual();
+            const listaExibida = estadoFiltro === '__incidente__' ? filtrarBusca(incidentesAtivos) : estadoFiltro === '__subjudice__' ? filtrarBusca(subJudiceAtivos) : listaAtual;
             const podeLote = (isMaster || podeAdministrar) && !estadoFiltro;
 
             if (listaExibida.length === 0) return <p className="empty-state">Nenhum processo encontrado</p>;
@@ -1582,7 +1630,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                   </div>
                 )}
 
-                {listaExibida.map((p) => {
+                {listaExibida.slice(0, quantidadeExibida).map((p) => {
                   const limitePrazo = PRAZO_DIAS_POR_ESTADO[p.estado];
                   const foraDoPrazo = (!!limitePrazo && diasNoEstado(p.entradaNoEstadoEm) > limitePrazo) || (p.estado === 'acompanhamento_tacs' && temObrigacaoVencida(p));
                   const emBlinkVermelho = foraDoPrazo || p.subJudice;
@@ -1644,6 +1692,13 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                   </div>
                   );
                 })}
+
+                {listaExibida.length > quantidadeExibida && (
+                  <button type="button" className="btn-secondary" style={{ width: '100%', marginTop: '10px' }}
+                    onClick={() => setQuantidadeExibida((q) => q + 60)}>
+                    Carregar mais ({listaExibida.length - quantidadeExibida} restante{listaExibida.length - quantidadeExibida === 1 ? '' : 's'})
+                  </button>
+                )}
               </>
             );
           })()}
