@@ -17,10 +17,10 @@ const ESTADOS_AMBIENTAL = {
   pendente_retorno_ar:                  { label: 'Pendente de Retorno de AR',                            nucleo: 'notificacoes', ordem: 3 },
   ar_sem_retorno_rastreio:              { label: 'AR Sem Retorno — Consulta de Rastreio (+60 dias)',     nucleo: 'notificacoes', ordem: 3.5, destaqueAcimaDe: 'pendente_retorno_ar' },
   aguardando_prazo_ar:                  { label: 'Aguardando Decurso de Prazo de AR',                    nucleo: 'notificacoes', ordem: 4, auto: true },
-  pendente_certificacao_ar:             { label: 'Pendente de Certificação (AR)',                        nucleo: 'notificacoes', ordem: 4.1, certificacao: true },
+  pendente_certificacao_ar:             { label: 'Pendente de Certificação de retorno do AR/Apresentação de Defesa/Não-apresentação de defesa', nucleo: 'notificacoes', ordem: 4.1, certificacao: true },
   pendente_edital:                      { label: 'Pendente de Edital',                                   nucleo: 'asstec',       ordem: 5 },
   aguardando_prazo_edital:              { label: 'Aguardando Decurso de Prazo de Edital',                nucleo: 'notificacoes', ordem: 6, auto: true },
-  pendente_certificacao_edital:         { label: 'Pendente de Certificação (Edital)',                    nucleo: 'notificacoes', ordem: 6.1, certificacao: true },
+  pendente_certificacao_edital:         { label: 'Pendente de Certificação de decurso de prazo de edital com Apresentação de Defesa/Não-apresentação de defesa', nucleo: 'notificacoes', ordem: 6.1, certificacao: true },
   aguardando_saneamento:                { label: 'Aguardando Saneamento/Julgamento',                     nucleo: 'asstec',       ordem: 7 },
   acompanhamento_tacs:                  { label: 'Acompanhamento de TACs',                               nucleo: 'asstec',       ordem: 7.2 },
   pendente_diligencia:                  { label: 'Pendente de Diligência',                                nucleo: 'notificacoes', ordem: 8 },
@@ -30,10 +30,10 @@ const ESTADOS_AMBIENTAL = {
   pendente_retorno_ar_decisao:          { label: 'Pendente de Retorno de AR (Notificação de Decisão)',   nucleo: 'notificacoes', ordem: 9.4 },
   ar_sem_retorno_rastreio_decisao:      { label: 'AR Sem Retorno — Consulta de Rastreio (+60 dias)',     nucleo: 'notificacoes', ordem: 9.45, destaqueAcimaDe: 'pendente_retorno_ar_decisao' },
   aguardando_prazo_notificacao_decisao: { label: 'Aguardando Decurso de Prazo de Notificação',           nucleo: 'notificacoes', ordem: 10, auto: true },
-  pendente_certificacao_decisao:        { label: 'Pendente de Certificação',                             nucleo: 'notificacoes', ordem: 10.1, certificacao: true },
+  pendente_certificacao_decisao:        { label: 'Pendente de Certificação de retorno do AR/Apresentação de recurso/Não-apresentação de recurso', nucleo: 'notificacoes', ordem: 10.1, certificacao: true },
   pendente_edital_decisao:              { label: 'Pendente de Edital da Decisão',                        nucleo: 'asstec',       ordem: 11 },
   aguardando_prazo_recurso_edital:      { label: 'Aguardando Decurso do Prazo para Recurso de Edital',   nucleo: 'notificacoes', ordem: 12, auto: true },
-  pendente_certificacao_edital_decisao: { label: 'Pendente de Certificação',                             nucleo: 'notificacoes', ordem: 12.1, certificacao: true },
+  pendente_certificacao_edital_decisao: { label: 'Pendente de Certificação de decurso de prazo de edital com Apresentação de recurso/Não-apresentação de recurso', nucleo: 'notificacoes', ordem: 12.1, certificacao: true },
   pendente_despacho_consema:            { label: 'Pendente de Despacho/Remessa para CONSEMA',            nucleo: 'asstec',       ordem: 13 },
   cobranca_administrativa:              { label: 'Cobrança Administrativa Ativa',                        nucleo: 'ambos',        ordem: 14, auto: true },
   pendente_envio_pge:                   { label: 'Pendente de Envio para PGE',                            nucleo: 'asstec',       ordem: 15 },
@@ -201,7 +201,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const [quantidadeExibida, setQuantidadeExibida] = useState(60);
   const [nucleoFiltro, setNucleoFiltro] = useState('todos');
   const [mostrarConcluidos, setMostrarConcluidos] = useState(false);
-  const [novo, setNovo] = useState({ numeroSEI: '', parte: '', cpfCnpj: '', valorMulta: '', autoInfracao: '', termoSancao: '', enderecos: [], descricaoInfracao: '', observacaoInicial: '', urgenteInicial: false, orgaoPublicoInicial: false, atencaoInicial: false, pedidoPrioridadeInicial: false });
+  const [novo, setNovo] = useState({ numeroSEI: '', parte: '', cpfCnpj: '', valorMulta: '', autoInfracao: '', termoSancao: '', enderecos: [], descricaoInfracao: '', observacaoInicial: '', urgenteInicial: false, orgaoPublicoInicial: false, atencaoInicial: false, pedidoPrioridadeInicial: false, reparacaoDanoInicial: false });
   const [dataInput, setDataInput] = useState('');
   const [novoEndereco, setNovoEndereco] = useState({ logradouro: '', numero: '', bairro: '', cep: '', cidade: '', uf: '', complemento: '' });
   // Texto livre do "AR Não Cumprido" (pesquisa de novo endereço do
@@ -220,6 +220,8 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   // Ao marcar "Sub Judice", exige informar o número do PJE antes de salvar.
   const [showSubJudiceForm, setShowSubJudiceForm] = useState(false);
   const [subJudiceForm, setSubJudiceForm] = useState({ numeroPJE: '', observacao: '' });
+  // Observação opcional ao registrar a verificação trimestral da reparação do dano.
+  const [obsVerificacaoReparacao, setObsVerificacaoReparacao] = useState('');
   const [showResolverIncidente, setShowResolverIncidente] = useState(false);
   const [resolverForm, setResolverForm] = useState({ tipoResolucao: '', observacao: '' });
   const [confirmAction, setConfirmAction] = useState(null); // { mensagem, onConfirm }
@@ -232,7 +234,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const [estadoNovoProcesso, setEstadoNovoProcesso] = useState('');
   const [observacaoInput, setObservacaoInput] = useState('');
   const [editandoInfo, setEditandoInfo] = useState(false);
-  const [editForm, setEditForm] = useState({ numeroSEI: '', parte: '', cpfCnpj: '', valorMulta: '' });
+  const [editForm, setEditForm] = useState({ numeroSEI: '', parte: '', cpfCnpj: '', valorMulta: '', reparacaoDano: false });
   const [showArNaoCumpridoForm, setShowArNaoCumpridoForm] = useState(false);
   const [semNovoEndereco, setSemNovoEndereco] = useState(false);
   const [showArquivarForm, setShowArquivarForm] = useState(false);
@@ -303,6 +305,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     setObrigacaoEmDecisao(null);
     setShowSubJudiceForm(false);
     setSubJudiceForm({ numeroPJE: '', observacao: '' });
+    setObsVerificacaoReparacao('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
@@ -562,6 +565,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             parte: editForm.parte.trim(),
             cpfCnpj: editForm.cpfCnpj.trim(),
             valorMulta: parseMoeda(editForm.valorMulta),
+            ...camposReparacaoDano(p, editForm.reparacaoDano),
           });
         });
       } else {
@@ -571,6 +575,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           parte: editForm.parte.trim(),
           cpfCnpj: editForm.cpfCnpj.trim(),
           valorMulta: parseMoeda(editForm.valorMulta),
+          ...camposReparacaoDano(p, editForm.reparacaoDano),
         });
       }
     } catch (e) {
@@ -689,6 +694,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           orgaoPublico: novo.orgaoPublicoInicial,
           atencao: novo.atencaoInicial,
           pedidoPrioridade: podeVerPrioridade ? novo.pedidoPrioridadeInicial : false,
+          ...camposReparacaoDano(null, novo.reparacaoDanoInicial),
           estado: estadoInicial,
           dataAutuacao: new Date().toISOString().slice(0, 10),
           entradaNoEstadoEm: new Date().toISOString(),
@@ -708,7 +714,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       return;
     }
 
-    setNovo({ numeroSEI: '', parte: '', cpfCnpj: '', valorMulta: '', autoInfracao: '', termoSancao: '', enderecos: [], descricaoInfracao: '', observacaoInicial: '', urgenteInicial: false, orgaoPublicoInicial: false, atencaoInicial: false, pedidoPrioridadeInicial: false });
+    setNovo({ numeroSEI: '', parte: '', cpfCnpj: '', valorMulta: '', autoInfracao: '', termoSancao: '', enderecos: [], descricaoInfracao: '', observacaoInicial: '', urgenteInicial: false, orgaoPublicoInicial: false, atencaoInicial: false, pedidoPrioridadeInicial: false, reparacaoDanoInicial: false });
     setNovoEndereco({ logradouro: '', numero: '', bairro: '', cep: '', cidade: '', uf: '', complemento: '' });
     setEstadoNovoProcesso('');
     setDataInicioPrazoMaster('');
@@ -846,6 +852,40 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       : { subJudice: false, numeroPJE: '', observacaoSubJudice: '' });
   };
 
+  // ─── Acompanhamento de Reparação do Dano ─────────────────────────
+  // A obrigação de reparar o dano ambiental é imprescritível: o processo é
+  // "espelhado" neste acompanhamento (como o Sub Judice, não é um estado
+  // exclusivo — o trâmite normal segue, e continua aqui mesmo depois de
+  // concluído/arquivado). A cada 3 meses sem verificação registrada, o
+  // processo e o card piscam em vermelho, para verificar e notificar o
+  // empreendedor sobre o passivo ambiental.
+  const camposReparacaoDano = (p, valor) => {
+    const atual = p?.reparacaoDano;
+    if (!!valor === !!atual?.ativo) return {};
+    const agora = new Date().toISOString();
+    return valor
+      ? { reparacaoDano: { ativo: true, desde: agora, marcadoPor: currentUser, ultimaVerificacaoEm: null, verificacoes: atual?.verificacoes || [] } }
+      : { reparacaoDano: { ...atual, ativo: false, removidoEm: agora, removidoPor: currentUser } };
+  };
+  const marcarReparacaoDano = async (p, valor) => {
+    const campos = camposReparacaoDano(p, valor);
+    if (Object.keys(campos).length) await updateDoc(doc(db, 'processosAmbientais', p.id), campos);
+  };
+  const registrarVerificacaoReparacao = async (p, observacao) => {
+    const agora = new Date().toISOString();
+    const r = p.reparacaoDano || {};
+    await updateDoc(doc(db, 'processosAmbientais', p.id), {
+      reparacaoDano: { ...r, ultimaVerificacaoEm: agora, verificacoes: [...(r.verificacoes || []), { em: agora, por: currentUser, observacao: (observacao || '').trim() }] },
+    });
+    setObsVerificacaoReparacao('');
+  };
+  const proximaVerificacaoReparacao = (p) => {
+    const base = new Date(p.reparacaoDano?.ultimaVerificacaoEm || p.reparacaoDano?.desde || Date.now());
+    base.setMonth(base.getMonth() + 3);
+    return base;
+  };
+  const reparacaoPendente = (p) => !!p.reparacaoDano?.ativo && proximaVerificacaoReparacao(p) <= new Date();
+
   // ─── Visibilidade por núcleo ──────────────────────────────────────
   // Master e quem tem "Admin. Ambiental Total" podem alternar livremente
   // entre Visão Total, ASSTEC e Notificações — por padrão, veem o setor a
@@ -870,6 +910,12 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   // Acompanhamento de TACs também sai do fluxo sequencial — vira um card
   // próprio, ao lado do de Processos em Incidente, do qual se origina.
   const TODOS_ESTADOS_ESPECIAIS = [...ESTADOS_FORA_DO_FLUXO_PRINCIPAL, 'acompanhamento_tacs'];
+  // Número do passo de cada estado no fluxo principal — fixo para todas as
+  // visões, para que "passo 7" signifique a mesma coisa para todo mundo.
+  const NUMERO_PASSO = Object.fromEntries(Object.entries(ESTADOS_AMBIENTAL)
+    .filter(([id]) => !TODOS_ESTADOS_ESPECIAIS.includes(id))
+    .sort((a, b) => a[1].ordem - b[1].ordem)
+    .map(([id], i) => [id, i + 1]));
   const estadosVisiveis = Object.entries(ESTADOS_AMBIENTAL)
     // Os estados "sem retorno/consulta de rastreio" e o de Acompanhamento de
     // TACs não entram no fluxo principal — cada um tem card próprio,
@@ -888,6 +934,14 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   // Sub Judice não é um estado exclusivo — o processo continua seu trâmite
   // normal e, ao mesmo tempo, aparece marcado no card especial da dashboard.
   const subJudiceAtivos = useMemo(() => processos.filter((p) => p.subJudice && !p.concluido), [processos]);
+  // Reparação do dano é imprescritível: inclui também concluídos/arquivados.
+  // Os que já passaram dos 3 meses sem verificação vêm primeiro.
+  const reparacaoAtivos = useMemo(() => processos
+    .filter((p) => p.reparacaoDano?.ativo)
+    .sort((a, b) => proximaVerificacaoReparacao(a) - proximaVerificacaoReparacao(b)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [processos]);
+  const reparacaoPendentes = reparacaoAtivos.filter(reparacaoPendente).length;
 
   const buscaDigits = onlyDigits(busca);
   const filtrarBusca = (lista) => {
@@ -1261,7 +1315,16 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
         );
 
       case 'pendente_despacho_consema':
-        return <button className="btn-primary" onClick={() => pedirConfirmacao('Concluir/arquivar este processo? Ele sairá das listas ativas.', () => concluirProcesso(p))}>Concluir / Arquivar Processo</button>;
+        return (
+          <div className="action-buttons">
+            <button className="btn-primary" onClick={() => pedirConfirmacao('Concluir/arquivar este processo? Ele sairá das listas ativas.', () => concluirProcesso(p))}>Concluir / Arquivar Processo</button>
+            {p.reparacaoDano?.ativo ? (
+              <span style={{ fontSize: '12px', color: 'var(--text-secondary)', alignSelf: 'center' }}>🌱 Já espelhado em Acompanhamento de Reparação do Dano</span>
+            ) : (
+              <button className="btn-secondary" onClick={() => pedirConfirmacao('Espelhar este processo em "Acompanhamento de Reparação do Dano"? O trâmite normal não é afetado; a cada 3 meses o processo piscará em vermelho para verificação e notificação do empreendedor.', () => marcarReparacaoDano(p, true))}>🌱 Espelhar em Acompanhamento de Reparação do Dano</button>
+            )}
+          </div>
+        );
 
       case 'pendente_envio_pge':
         return (
@@ -1325,7 +1388,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             </div>
           )}
 
-          {!publico && (nucleoView === 'todos' || nucleoView === 'asstec') && (incidentesAtivos.length > 0 || subJudiceAtivos.length > 0 || contarEstado('acompanhamento_tacs').length > 0) && (
+          {!publico && (nucleoView === 'todos' || nucleoView === 'asstec') && (incidentesAtivos.length > 0 || subJudiceAtivos.length > 0 || contarEstado('acompanhamento_tacs').length > 0 || reparacaoAtivos.length > 0) && (
             <div className="pa-dash-grid" style={{ marginBottom: '18px' }}>
               {incidentesAtivos.length > 0 && (
                 <div className="pa-card pa-card-incident" onClick={() => { setEstadoFiltro('__incidente__'); setView('lista'); }}>
@@ -1344,6 +1407,13 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                   <span className="pa-card-count">{contarEstado('acompanhamento_tacs').length}</span>
                   <span className="pa-card-label">📝 Acompanhamento de TACs</span>
                   {contarTACsVencidos() > 0 && <span className="pa-card-urgent-badge">⏰ {contarTACsVencidos()} TAC{contarTACsVencidos() === 1 ? '' : 's'} com Obrigações Vencidas</span>}
+                </div>
+              )}
+              {reparacaoAtivos.length > 0 && (
+                <div className={`pa-card pa-card-reparacao${reparacaoPendentes > 0 ? ' pa-card-blink-red' : ''}`} onClick={() => { setEstadoFiltro('__reparacao__'); setView('lista'); }}>
+                  <span className="pa-card-count">{reparacaoAtivos.length}</span>
+                  <span className="pa-card-label">🌱 Acompanhamento de Reparação do Dano</span>
+                  {reparacaoPendentes > 0 && <span className="pa-card-urgent-badge">⏰ {reparacaoPendentes} processo{reparacaoPendentes === 1 ? '' : 's'} para verificar/notificar</span>}
                 </div>
               )}
             </div>
@@ -1374,6 +1444,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                     className={`pa-card ${classeBlink}${publico ? ' pa-card-somente-leitura' : ''}`}
                     onClick={publico ? undefined : () => abrirGrupo(id)}
                   >
+                    <span className="pa-card-step" title={`Passo ${NUMERO_PASSO[id]} do fluxo`}>Passo {NUMERO_PASSO[id]}</span>
                     {setorLabel && <span className="pa-card-sector-badge">{setorLabel}</span>}
                     <span className="pa-card-count">{contarEstado(id).length}</span>
                     <span className="pa-card-label">{est.label}</span>
@@ -1552,6 +1623,10 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                 <span>⭐ Pedido de Prioridade <em>— visível só para a ASSTEC, card azul</em></span>
               </label>
             )}
+            <label className="pa-marcador-toggle">
+              <input type="checkbox" checked={novo.reparacaoDanoInicial} onChange={(e) => setNovo({ ...novo, reparacaoDanoInicial: e.target.checked })} />
+              <span>🌱 Acompanhamento de Reparação do Dano <em>— pisca em vermelho a cada 3 meses, sem afetar o trâmite</em></span>
+            </label>
           </div>
 
           <div className="form-actions">
@@ -1564,7 +1639,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       {view === 'lista' && (
         <div className="list-view">
           <div className="list-header">
-            <h3>{estadoFiltro === '__incidente__' ? '🚧 Processos em Incidente' : estadoFiltro === '__subjudice__' ? '⚖️ Processos Sub Judice' : estadoFiltro ? ESTADOS_AMBIENTAL[estadoFiltro]?.label : 'Todos os Processos'}</h3>
+            <h3>{estadoFiltro === '__incidente__' ? '🚧 Processos em Incidente' : estadoFiltro === '__subjudice__' ? '⚖️ Processos Sub Judice' : estadoFiltro === '__reparacao__' ? '🌱 Acompanhamento de Reparação do Dano' : estadoFiltro ? ESTADOS_AMBIENTAL[estadoFiltro]?.label : 'Todos os Processos'}</h3>
             <div className="header-buttons">
               <button className="btn-settings" onClick={() => setView('dashboard')}>← Voltar à Dashboard</button>
             </div>
@@ -1597,7 +1672,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           )}
 
           {(() => {
-            const listaExibida = estadoFiltro === '__incidente__' ? filtrarBusca(incidentesAtivos) : estadoFiltro === '__subjudice__' ? filtrarBusca(subJudiceAtivos) : listaAtual;
+            const listaExibida = estadoFiltro === '__incidente__' ? filtrarBusca(incidentesAtivos) : estadoFiltro === '__subjudice__' ? filtrarBusca(subJudiceAtivos) : estadoFiltro === '__reparacao__' ? filtrarBusca(reparacaoAtivos) : listaAtual;
             const podeLote = (isMaster || podeAdministrar) && !estadoFiltro;
 
             if (listaExibida.length === 0) return <p className="empty-state">Nenhum processo encontrado</p>;
@@ -1633,9 +1708,10 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                 {listaExibida.slice(0, quantidadeExibida).map((p) => {
                   const limitePrazo = PRAZO_DIAS_POR_ESTADO[p.estado];
                   const foraDoPrazo = (!!limitePrazo && diasNoEstado(p.entradaNoEstadoEm) > limitePrazo) || (p.estado === 'acompanhamento_tacs' && temObrigacaoVencida(p));
-                  const emBlinkVermelho = foraDoPrazo || p.subJudice;
+                  const verificarReparacao = reparacaoPendente(p);
+                  const emBlinkVermelho = foraDoPrazo || p.subJudice || verificarReparacao;
                   const mostraPrioridade = podeVerPrioridade && p.pedidoPrioridade;
-                  const éNovo = estadoFiltro && estadoFiltro !== '__incidente__' && estadoFiltro !== '__subjudice__' && vezesVisto(p) < 3;
+                  const éNovo = estadoFiltro && estadoFiltro !== '__incidente__' && estadoFiltro !== '__subjudice__' && estadoFiltro !== '__reparacao__' && vezesVisto(p) < 3;
                   // Prioridade visual: fora do prazo/Sub Judice (pisca vermelho) >
                   // pedido de prioridade (azul) > urgente/atenção (amarelo) >
                   // órgão público (verde) > novo processo (pisca).
@@ -1650,9 +1726,10 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                           : (éNovo ? 'card-item-blink' : '');
                   return (
                   <div key={p.id} className={`card-item ${marcadorClasse}`} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', flexDirection: 'column' }}>
-                    {(p.orgaoPublico || p.subJudice) && (
+                    {(p.orgaoPublico || p.subJudice || p.reparacaoDano?.ativo) && (
                       <div className="card-item-corner-badges">
                         {p.subJudice && <span className="card-item-corner-badge card-item-corner-badge-subjudice">⚖️ Sub Judice</span>}
+                        {p.reparacaoDano?.ativo && <span className="card-item-corner-badge card-item-corner-badge-reparacao">🌱 Reparação do Dano</span>}
                         {p.orgaoPublico && <span className="card-item-corner-badge">🏛️ Órgão/Ente Público</span>}
                       </div>
                     )}
@@ -1666,8 +1743,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                           <strong>{p.numeroSEI}</strong>
                           <span className="badge status-pendente">{p.incidente?.ativo ? '🚧 Incidente' : ESTADOS_AMBIENTAL[p.estado]?.label}</span>
                         </div>
-                        {(foraDoPrazo || mostraPrioridade || p.urgente || p.atencao) && (
+                        {(foraDoPrazo || verificarReparacao || mostraPrioridade || p.urgente || p.atencao) && (
                           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', margin: '2px 0 6px' }}>
+                            {verificarReparacao && <span className="card-item-tag card-item-tag-atraso">⏰ Verificar Reparação do Dano</span>}
                             {foraDoPrazo && <span className="card-item-tag card-item-tag-atraso">⏰ {p.estado === 'acompanhamento_tacs' ? 'Obrigação Vencida' : 'Fora do Prazo'}</span>}
                             {mostraPrioridade && <span className="card-item-tag card-item-tag-prioridade">⭐ Pedido de Prioridade</span>}
                             {p.urgente && <span className="card-item-tag card-item-tag-urgente">🔴 Urgente</span>}
@@ -1685,6 +1763,11 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                         )}
                         {p.subJudice && (
                           <p className="card-text" style={{ color: 'var(--accent-red, #B14C40)', fontWeight: 700 }}>⚖️ Sub Judice — PJE {p.numeroPJE || 'não informado'}</p>
+                        )}
+                        {p.reparacaoDano?.ativo && (
+                          <p className="card-text" style={verificarReparacao ? { color: 'var(--accent-red, #B14C40)', fontWeight: 700 } : undefined}>
+                            <strong>🌱 Próxima verificação da reparação:</strong> {proximaVerificacaoReparacao(p).toLocaleDateString('pt-BR')}{verificarReparacao ? ' — verificar e notificar o empreendedor' : ''}
+                          </p>
                         )}
                       </div>
                     </div>
@@ -1712,8 +1795,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             <h2>🌿 {selected.numeroSEI}</h2>
             <span className="badge status-pendente">{selected.incidente?.ativo ? '🚧 Incidente' : ESTADOS_AMBIENTAL[selected.estado]?.label}</span>
           </div>
-          {(selected.urgente || selected.atencao || selected.orgaoPublico || selected.subJudice || (podeVerPrioridade && selected.pedidoPrioridade)) && (
+          {(selected.urgente || selected.atencao || selected.orgaoPublico || selected.subJudice || selected.reparacaoDano?.ativo || (podeVerPrioridade && selected.pedidoPrioridade)) && (
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', margin: '-6px 0 14px' }}>
+              {selected.reparacaoDano?.ativo && <span className="card-item-tag card-item-tag-reparacao">🌱 Reparação do Dano</span>}
               {selected.subJudice && <span className="card-item-tag card-item-tag-subjudice">⚖️ Sub Judice{selected.numeroPJE ? ` — PJE ${selected.numeroPJE}` : ''}</span>}
               {selected.urgente && <span className="card-item-tag card-item-tag-urgente">🔴 Urgente</span>}
               {selected.atencao && <span className="card-item-tag card-item-tag-atencao">⚠️ Atenção</span>}
@@ -1787,6 +1871,39 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             )}
           </div>
 
+          {selected.reparacaoDano?.ativo && (
+            <div className={`info-box${reparacaoPendente(selected) ? ' card-item-blink-red' : ''}`}>
+              <label>🌱 Acompanhamento de Reparação do Dano</label>
+              <p style={{ fontSize: '13px', margin: '4px 0' }}>
+                Espelhado em {new Date(selected.reparacaoDano.desde).toLocaleDateString('pt-BR')}
+                {selected.reparacaoDano.ultimaVerificacaoEm ? ` · última verificação em ${new Date(selected.reparacaoDano.ultimaVerificacaoEm).toLocaleDateString('pt-BR')}` : ' · nenhuma verificação registrada'}
+                {' · '}<strong>próxima: {proximaVerificacaoReparacao(selected).toLocaleDateString('pt-BR')}</strong>
+              </p>
+              {reparacaoPendente(selected) && (
+                <p style={{ fontSize: '13px', color: 'var(--accent-red, #B14C40)', fontWeight: 700, margin: '4px 0' }}>⏰ Passaram-se 3 meses: verifique o passivo ambiental e notifique o empreendedor.</p>
+              )}
+              {(selected.reparacaoDano.verificacoes || []).length > 0 && (
+                <ul style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: '6px 0', paddingLeft: '18px' }}>
+                  {[...selected.reparacaoDano.verificacoes].reverse().map((v, i) => (
+                    <li key={i}>{new Date(v.em).toLocaleDateString('pt-BR')} — {ALL_USERS?.[v.por]?.nome || v.por}{v.observacao ? `: ${v.observacao}` : ''}</li>
+                  ))}
+                </ul>
+              )}
+              {!somenteConsulta && (isMaster || podeAdministrar || meuNucleo === 'asstec') && (
+                <>
+                  <div className="form-group" style={{ marginTop: '8px' }}>
+                    <label>Observação da verificação (opcional)</label>
+                    <textarea value={obsVerificacaoReparacao} onChange={(e) => setObsVerificacaoReparacao(e.target.value)} placeholder="Ex.: empreendedor notificado por AR; área ainda não recuperada..." />
+                  </div>
+                  <div className="action-buttons">
+                    <button className="btn-primary" onClick={() => pedirConfirmacao('Registrar a verificação/notificação da reparação do dano? O próximo alerta será em 3 meses.', () => registrarVerificacaoReparacao(selected, obsVerificacaoReparacao))}>✅ Registrar Verificação/Notificação</button>
+                    <button className="link-btn" style={{ fontSize: '12px', color: 'var(--text-secondary)' }} onClick={() => pedirConfirmacao('Retirar este processo do Acompanhamento de Reparação do Dano?', () => marcarReparacaoDano(selected, false))}>Retirar do acompanhamento</button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
           <div className="info-box">
             <label>📝 Observações</label>
             <div className="form-group">
@@ -1812,13 +1929,17 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                   <div className="form-group"><label>Valor da Multa (R$)</label>
                     <input type="text" value={editForm.valorMulta} onChange={(e) => setEditForm({ ...editForm, valorMulta: e.target.value })} />
                   </div>
+                  <label className="pa-marcador-toggle" style={{ marginBottom: '12px' }}>
+                    <input type="checkbox" checked={editForm.reparacaoDano} onChange={(e) => setEditForm({ ...editForm, reparacaoDano: e.target.checked })} />
+                    <span>🌱 Acompanhamento de Reparação do Dano <em>— pisca em vermelho a cada 3 meses, sem afetar o trâmite</em></span>
+                  </label>
                   <div className="form-actions">
                     <button className="btn-primary" onClick={() => pedirConfirmacao('Confirma a alteração dos dados cadastrais deste processo?', () => salvarEdicaoInfo(selected))}>Salvar Alterações</button>
                     <button className="btn-secondary" onClick={() => setEditandoInfo(false)}>Cancelar</button>
                   </div>
                 </>
               ) : (
-                <button className="btn-secondary" onClick={() => { setEditForm({ numeroSEI: selected.numeroSEI, parte: selected.parte, cpfCnpj: selected.cpfCnpj || '', valorMulta: String(selected.valorMulta || '') }); setEditandoInfo(true); }}>
+                <button className="btn-secondary" onClick={() => { setEditForm({ numeroSEI: selected.numeroSEI, parte: selected.parte, cpfCnpj: selected.cpfCnpj || '', valorMulta: String(selected.valorMulta || ''), reparacaoDano: !!selected.reparacaoDano?.ativo }); setEditandoInfo(true); }}>
                   Editar Informações
                 </button>
               )}

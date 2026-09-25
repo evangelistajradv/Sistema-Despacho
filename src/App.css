@@ -3949,6 +3949,17 @@ button, input, select, textarea {
   color: var(--accent-red, #B14C40);
 }
 
+/* Acompanhamento de Reparação do Dano (imprescritível) — verde; pisca em
+   vermelho (pa-card-blink-red) quando há processo com 3 meses sem verificação. */
+.pa-card-reparacao {
+  border-color: var(--accent-green, #3F8F5F);
+  background: rgba(63, 143, 95, 0.07);
+}
+
+.pa-card-reparacao .pa-card-count {
+  color: var(--accent-green, #3F8F5F);
+}
+
 .pa-card-priority-badge {
   font-size: 11px;
   font-weight: 700;
@@ -4032,6 +4043,24 @@ button, input, select, textarea {
 .pa-flow-grid .pa-card {
   flex: 1 1 220px;
   max-width: 260px;
+}
+
+/* Número discreto do passo, no canto superior esquerdo do card do fluxo */
+.pa-flow-grid .pa-card {
+  padding-top: 28px;
+}
+
+.pa-card-step {
+  position: absolute;
+  top: 10px;
+  left: 14px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  opacity: 0.6;
+  line-height: 1.2;
 }
 
 .pa-flow-arrow {
@@ -4237,6 +4266,15 @@ button, input, select, textarea {
 
 .card-item-corner-badge-subjudice {
   background: var(--accent-red, #B14C40);
+}
+
+.card-item-corner-badge-reparacao {
+  background: var(--accent-green, #3F8F5F);
+}
+
+.card-item-tag-reparacao {
+  color: #fff;
+  background: var(--accent-green, #3F8F5F);
 }
 
 .card-item-tag {
