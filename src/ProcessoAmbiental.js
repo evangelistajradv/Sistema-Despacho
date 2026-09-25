@@ -727,6 +727,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           pedidoPrioridade: podeVerPrioridade ? novo.pedidoPrioridadeInicial : false,
           ...camposReparacaoDano(null, novo.reparacaoDanoInicial, pendenciaImediataReparacao),
           estado: estadoInicial,
+          estadoInicial,
           dataAutuacao: new Date().toISOString().slice(0, 10),
           entradaNoEstadoEm: new Date().toISOString(),
           vistoPor: {},
@@ -1086,6 +1087,24 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [processos]);
   const reparacaoPendentes = reparacaoAtivos.filter(reparacaoPendente).length;
+
+  // Sugestão de estado inicial na autuação: o estado em que este usuário
+  // autuou o seu processo mais recente (campo estadoInicial, gravado na
+  // autuação). Vale em qualquer computador, pois vem do próprio banco.
+  const ultimoEstadoAutuado = useMemo(() => {
+    let ultimo = null;
+    for (const p of processos) {
+      if (p.criadoPor === currentUser && p.estadoInicial && ESTADOS_AMBIENTAL[p.estadoInicial] && (!ultimo || p.criadoEm > ultimo.criadoEm)) ultimo = p;
+    }
+    return ultimo?.estadoInicial || null;
+  }, [processos, currentUser]);
+  useEffect(() => {
+    if (view !== 'novo' || !(isMaster || podeAdministrar) || !ultimoEstadoAutuado) return;
+    setEstadoNovoProcesso(ultimoEstadoAutuado === 'triagem' ? '' : ultimoEstadoAutuado);
+    setDataInicioPrazoMaster('');
+    // Só ao abrir o formulário — não sobrescreve uma escolha feita nele.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
 
   const buscaDigits = onlyDigits(busca);
   const filtrarBusca = (lista) => {
@@ -1759,11 +1778,14 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           {(isMaster || podeAdministrar) && (
             <div className="form-group">
               <label>Estado Inicial (opcional)</label>
+              {ultimoEstadoAutuado && (
+                <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: '2px 0 6px' }}>Sugerido: o estado do seu último processo autuado ({ESTADOS_AMBIENTAL[ultimoEstadoAutuado].label}).</p>
+              )}
               <select value={estadoNovoProcesso} onChange={(e) => { setEstadoNovoProcesso(e.target.value); setDataInicioPrazoMaster(''); }}
                 style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--neutral-300)', borderRadius: '8px', background: 'var(--bg-card)', color: 'var(--text-primary)' }}>
                 <option value="">Padrão — Aguardando Triagem Inicial</option>
                 {Object.entries(ESTADOS_AMBIENTAL).sort((a, b) => a[1].ordem - b[1].ordem).map(([id, e]) => (
-                  <option key={id} value={id}>{e.label}</option>
+                  <option key={id} value={id}>{e.label}{id === ultimoEstadoAutuado ? ' (último usado)' : ''}</option>
                 ))}
               </select>
             </div>
