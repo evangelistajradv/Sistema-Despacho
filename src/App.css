@@ -4243,13 +4243,13 @@ button, input, select, textarea {
   background: var(--accent-red, #B14C40);
 }
 
+/* Selos no topo do card, alinhados à direita e fora do fluxo do
+   cabeçalho — antes eram absolutos e ficavam por cima do badge de estado. */
 .card-item-corner-badges {
-  position: absolute;
-  top: 14px;
-  right: 16px;
+  align-self: flex-end;
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 5px;
 }
 

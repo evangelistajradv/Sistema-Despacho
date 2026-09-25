@@ -224,7 +224,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const [obsVerificacaoReparacao, setObsVerificacaoReparacao] = useState('');
   const [showResolverIncidente, setShowResolverIncidente] = useState(false);
   const [resolverForm, setResolverForm] = useState({ tipoResolucao: '', observacao: '' });
-  const [confirmAction, setConfirmAction] = useState(null); // { mensagem, onConfirm }
+  const [confirmAction, setConfirmAction] = useState(null); // { mensagem, onConfirm } ou { titulo, mensagem, opcoes: [{ label, className, onClick }] }
   const [estadoManualMaster, setEstadoManualMaster] = useState('');
   const [dataInicioPrazoMaster, setDataInicioPrazoMaster] = useState('');
   const [editandoDataPrazo, setEditandoDataPrazo] = useState(false);
@@ -255,6 +255,17 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   // Toda movimentação de processo passa por aqui: exibe um modal de
   // confirmação antes de executar a ação de fato.
   const pedirConfirmacao = (mensagem, onConfirm) => setConfirmAction({ mensagem, onConfirm });
+  // Ao incluir um processo no Acompanhamento de Reparação do Dano (autuação,
+  // edição ou remessa ao CONSEMA), pergunta se já deve nascer com pendência
+  // de verificação/notificação — ou só alertar daqui a 3 meses.
+  const perguntarPendenciaReparacao = (onEscolha) => setConfirmAction({
+    titulo: '🌱 Reparação do Dano',
+    mensagem: 'Deseja gerar uma pendência imediata para verificação/notificação do empreendedor acerca da regularização do dano? Se não, o primeiro alerta será daqui a 3 meses.',
+    opcoes: [
+      { label: 'Sim, gerar pendência imediata', className: 'btn-primary', onClick: () => onEscolha(true) },
+      { label: 'Não, alertar em 3 meses', className: 'btn-secondary', onClick: () => onEscolha(false) },
+    ],
+  });
 
   useEffect(() => {
     const unsub = onSnapshot(
@@ -539,7 +550,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
 
   // Master pode corrigir os dados cadastrais do processo (não é movimentação
   // de estado, então não passa pelo histórico de tramitação).
-  const salvarEdicaoInfo = async (p) => {
+  const salvarEdicaoInfo = async (p, pendenciaImediata = false) => {
     if (!editForm.numeroSEI.trim() || !editForm.parte.trim()) { alert('Preencha o número SEI e o nome da parte.'); return; }
 
     const numeroSEITrim = editForm.numeroSEI.trim();
@@ -565,7 +576,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             parte: editForm.parte.trim(),
             cpfCnpj: editForm.cpfCnpj.trim(),
             valorMulta: parseMoeda(editForm.valorMulta),
-            ...camposReparacaoDano(p, editForm.reparacaoDano),
+            ...camposReparacaoDano(p, editForm.reparacaoDano, pendenciaImediata),
           });
         });
       } else {
@@ -575,7 +586,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           parte: editForm.parte.trim(),
           cpfCnpj: editForm.cpfCnpj.trim(),
           valorMulta: parseMoeda(editForm.valorMulta),
-          ...camposReparacaoDano(p, editForm.reparacaoDano),
+          ...camposReparacaoDano(p, editForm.reparacaoDano, pendenciaImediata),
         });
       }
     } catch (e) {
@@ -645,7 +656,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     setEstadoLote('');
   };
 
-  const criarProcesso = async () => {
+  const criarProcesso = async (pendenciaImediataReparacao = false) => {
     if (!novo.numeroSEI.trim() || !novo.parte.trim()) { alert('Preencha o número SEI e o nome da parte.'); return; }
 
     const numeroSEITrim = novo.numeroSEI.trim();
@@ -694,7 +705,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           orgaoPublico: novo.orgaoPublicoInicial,
           atencao: novo.atencaoInicial,
           pedidoPrioridade: podeVerPrioridade ? novo.pedidoPrioridadeInicial : false,
-          ...camposReparacaoDano(null, novo.reparacaoDanoInicial),
+          ...camposReparacaoDano(null, novo.reparacaoDanoInicial, pendenciaImediataReparacao),
           estado: estadoInicial,
           dataAutuacao: new Date().toISOString().slice(0, 10),
           entradaNoEstadoEm: new Date().toISOString(),
@@ -859,32 +870,47 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   // concluído/arquivado). A cada 3 meses sem verificação registrada, o
   // processo e o card piscam em vermelho, para verificar e notificar o
   // empreendedor sobre o passivo ambiental.
-  const camposReparacaoDano = (p, valor) => {
+  const camposReparacaoDano = (p, valor, pendenciaImediata = false) => {
     const atual = p?.reparacaoDano;
     if (!!valor === !!atual?.ativo) return {};
     const agora = new Date().toISOString();
     return valor
-      ? { reparacaoDano: { ativo: true, desde: agora, marcadoPor: currentUser, ultimaVerificacaoEm: null, verificacoes: atual?.verificacoes || [] } }
+      ? { reparacaoDano: { ativo: true, desde: agora, marcadoPor: currentUser, pendenciaImediata: !!pendenciaImediata, ultimaVerificacaoEm: null, verificacoes: atual?.verificacoes || [] } }
       : { reparacaoDano: { ...atual, ativo: false, removidoEm: agora, removidoPor: currentUser } };
   };
-  const marcarReparacaoDano = async (p, valor) => {
-    const campos = camposReparacaoDano(p, valor);
+  const marcarReparacaoDano = async (p, valor, pendenciaImediata = false) => {
+    const campos = camposReparacaoDano(p, valor, pendenciaImediata);
     if (Object.keys(campos).length) await updateDoc(doc(db, 'processosAmbientais', p.id), campos);
   };
   const registrarVerificacaoReparacao = async (p, observacao) => {
     const agora = new Date().toISOString();
     const r = p.reparacaoDano || {};
     await updateDoc(doc(db, 'processosAmbientais', p.id), {
-      reparacaoDano: { ...r, ultimaVerificacaoEm: agora, verificacoes: [...(r.verificacoes || []), { em: agora, por: currentUser, observacao: (observacao || '').trim() }] },
+      reparacaoDano: { ...r, pendenciaImediata: false, ultimaVerificacaoEm: agora, verificacoes: [...(r.verificacoes || []), { em: agora, por: currentUser, observacao: (observacao || '').trim() }] },
     });
     setObsVerificacaoReparacao('');
   };
   const proximaVerificacaoReparacao = (p) => {
+    // Pendência imediata: vence já na inclusão, até a 1ª verificação registrada.
+    if (p.reparacaoDano?.pendenciaImediata) return new Date(p.reparacaoDano.desde);
     const base = new Date(p.reparacaoDano?.ultimaVerificacaoEm || p.reparacaoDano?.desde || Date.now());
     base.setMonth(base.getMonth() + 3);
     return base;
   };
   const reparacaoPendente = (p) => !!p.reparacaoDano?.ativo && proximaVerificacaoReparacao(p) <= new Date();
+  // Coloca de uma vez todos os processos do acompanhamento em pendência
+  // imediata (ex.: para uma rodada geral de verificação/notificação).
+  const marcarTodasReparacoesPendentes = async (lista) => {
+    const alvo = lista.filter((p) => !reparacaoPendente(p));
+    const CHUNK = 450;
+    for (let i = 0; i < alvo.length; i += CHUNK) {
+      const lote = writeBatch(db);
+      alvo.slice(i, i + CHUNK).forEach((p) => {
+        lote.update(doc(db, 'processosAmbientais', p.id), { 'reparacaoDano.pendenciaImediata': true });
+      });
+      await lote.commit();
+    }
+  };
 
   // ─── Visibilidade por núcleo ──────────────────────────────────────
   // Master e quem tem "Admin. Ambiental Total" podem alternar livremente
@@ -1321,7 +1347,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             {p.reparacaoDano?.ativo ? (
               <span style={{ fontSize: '12px', color: 'var(--text-secondary)', alignSelf: 'center' }}>🌱 Já espelhado em Acompanhamento de Reparação do Dano</span>
             ) : (
-              <button className="btn-secondary" onClick={() => pedirConfirmacao('Espelhar este processo em "Acompanhamento de Reparação do Dano"? O trâmite normal não é afetado; a cada 3 meses o processo piscará em vermelho para verificação e notificação do empreendedor.', () => marcarReparacaoDano(p, true))}>🌱 Espelhar em Acompanhamento de Reparação do Dano</button>
+              <button className="btn-secondary" onClick={() => perguntarPendenciaReparacao((imediata) => marcarReparacaoDano(p, true, imediata))}>🌱 Espelhar em Acompanhamento de Reparação do Dano</button>
             )}
           </div>
         );
@@ -1630,7 +1656,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           </div>
 
           <div className="form-actions">
-            <button className="btn-primary" onClick={criarProcesso}>Autuar Processo</button>
+            <button className="btn-primary" onClick={() => (novo.reparacaoDanoInicial ? perguntarPendenciaReparacao(criarProcesso) : criarProcesso())}>Autuar Processo</button>
             <button className="btn-secondary" onClick={() => { setView('dashboard'); setEstadoNovoProcesso(''); setDataInicioPrazoMaster(''); }}>Cancelar</button>
           </div>
         </div>
@@ -1641,6 +1667,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           <div className="list-header">
             <h3>{estadoFiltro === '__incidente__' ? '🚧 Processos em Incidente' : estadoFiltro === '__subjudice__' ? '⚖️ Processos Sub Judice' : estadoFiltro === '__reparacao__' ? '🌱 Acompanhamento de Reparação do Dano' : estadoFiltro ? ESTADOS_AMBIENTAL[estadoFiltro]?.label : 'Todos os Processos'}</h3>
             <div className="header-buttons">
+              {estadoFiltro === '__reparacao__' && (isMaster || podeAdministrar) && reparacaoAtivos.length > reparacaoPendentes && (
+                <button className="btn-settings" onClick={() => pedirConfirmacao(`Colocar todos os ${reparacaoAtivos.length - reparacaoPendentes} processo(s) sem pendência do Acompanhamento de Reparação do Dano em pendência imediata de verificação/notificação?`, () => marcarTodasReparacoesPendentes(reparacaoAtivos))}>⏰ Marcar todos com pendência</button>
+              )}
               <button className="btn-settings" onClick={() => setView('dashboard')}>← Voltar à Dashboard</button>
             </div>
           </div>
@@ -1934,7 +1963,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                     <span>🌱 Acompanhamento de Reparação do Dano <em>— pisca em vermelho a cada 3 meses, sem afetar o trâmite</em></span>
                   </label>
                   <div className="form-actions">
-                    <button className="btn-primary" onClick={() => pedirConfirmacao('Confirma a alteração dos dados cadastrais deste processo?', () => salvarEdicaoInfo(selected))}>Salvar Alterações</button>
+                    <button className="btn-primary" onClick={() => (editForm.reparacaoDano && !selected.reparacaoDano?.ativo
+                      ? perguntarPendenciaReparacao((imediata) => salvarEdicaoInfo(selected, imediata))
+                      : pedirConfirmacao('Confirma a alteração dos dados cadastrais deste processo?', () => salvarEdicaoInfo(selected)))}>Salvar Alterações</button>
                     <button className="btn-secondary" onClick={() => setEditandoInfo(false)}>Cancelar</button>
                   </div>
                 </>
@@ -2125,10 +2156,14 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       {confirmAction && (
         <div className="modal-overlay" onClick={() => setConfirmAction(null)}>
           <div className="modal-box" onClick={(e) => e.stopPropagation()}>
-            <h4>Confirmar Movimentação</h4>
+            <h4>{confirmAction.titulo || 'Confirmar Movimentação'}</h4>
             <p style={{ fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '12px' }}>{confirmAction.mensagem}</p>
             <div className="modal-actions">
-              <button className="btn-primary" onClick={() => { confirmAction.onConfirm(); setConfirmAction(null); }}>Confirmar</button>
+              {confirmAction.opcoes
+                ? confirmAction.opcoes.map((o) => (
+                  <button key={o.label} className={o.className} onClick={() => { o.onClick(); setConfirmAction(null); }}>{o.label}</button>
+                ))
+                : <button className="btn-primary" onClick={() => { confirmAction.onConfirm(); setConfirmAction(null); }}>Confirmar</button>}
               <button className="btn-secondary" onClick={() => setConfirmAction(null)}>Cancelar</button>
             </div>
           </div>
