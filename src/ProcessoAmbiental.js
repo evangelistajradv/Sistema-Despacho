@@ -232,6 +232,10 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const [selecionados, setSelecionados] = useState(new Set());
   const [estadoLote, setEstadoLote] = useState('');
   const [estadoNovoProcesso, setEstadoNovoProcesso] = useState('');
+  // TAC informado já na autuação, quando o estado inicial é Acompanhamento de TACs.
+  const [tacNovoForm, setTacNovoForm] = useState({ dataAssinatura: '', obrigacoes: [{ texto: '', tipoPrazo: 'dias', prazoDias: '', dataLimite: '' }] });
+  // TAC em edição dentro de "Editar Informações" (null = processo sem TAC e fora de Acompanhamento de TACs).
+  const [tacEditForm, setTacEditForm] = useState(null);
   const [observacaoInput, setObservacaoInput] = useState('');
   const [editandoInfo, setEditandoInfo] = useState(false);
   const [editForm, setEditForm] = useState({ numeroSEI: '', parte: '', cpfCnpj: '', valorMulta: '', reparacaoDano: false });
@@ -552,6 +556,13 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   // de estado, então não passa pelo histórico de tramitação).
   const salvarEdicaoInfo = async (p, pendenciaImediata = false) => {
     if (!editForm.numeroSEI.trim() || !editForm.parte.trim()) { alert('Preencha o número SEI e o nome da parte.'); return; }
+    const erroTAC = tacEditForm ? erroFormTAC(tacEditForm) : null;
+    if (erroTAC) { alert(erroTAC); return; }
+    // Grava o TAC só se houver algo (obrigações ou TAC já existente).
+    const obrigacoesEditadas = tacEditForm ? montarObrigacoesTAC(tacEditForm, p.tac?.obrigacoes || [], p.tac?.dataAssinatura || null) : [];
+    const camposTAC = tacEditForm && (p.tac || obrigacoesEditadas.length)
+      ? { tac: { ...(p.tac || { firmadoPor: currentUser, firmadoEm: new Date().toISOString() }), dataAssinatura: tacEditForm.dataAssinatura, obrigacoes: obrigacoesEditadas } }
+      : {};
 
     const numeroSEITrim = editForm.numeroSEI.trim();
     const novosDigits = onlyDigits(numeroSEITrim);
@@ -577,6 +588,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             cpfCnpj: editForm.cpfCnpj.trim(),
             valorMulta: parseMoeda(editForm.valorMulta),
             ...camposReparacaoDano(p, editForm.reparacaoDano, pendenciaImediata),
+            ...camposTAC,
           });
         });
       } else {
@@ -587,6 +599,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           cpfCnpj: editForm.cpfCnpj.trim(),
           valorMulta: parseMoeda(editForm.valorMulta),
           ...camposReparacaoDano(p, editForm.reparacaoDano, pendenciaImediata),
+            ...camposTAC,
         });
       }
     } catch (e) {
@@ -673,6 +686,11 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       return;
     }
 
+    const comTAC = estadoInicial === 'acompanhamento_tacs';
+    const erroTAC = comTAC ? erroFormTAC(tacNovoForm) : null;
+    if (erroTAC) { alert(erroTAC); return; }
+    const obrigacoesIniciais = comTAC ? montarObrigacoesTAC(tacNovoForm) : [];
+
     const datasIniciais = infoPrazoInicial ? { [infoPrazoInicial.campo]: dataInicioPrazoMaster } : {};
     const prazoInicial = infoPrazoInicial ? { ...calcularPrazo20Dias(dataInicioPrazoMaster), origem: estadoInicial } : null;
 
@@ -712,6 +730,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           vistoPor: {},
           datas: datasIniciais, historico: [], incidente: null, concluido: false,
           ...(prazoInicial ? { prazo: prazoInicial } : {}),
+          ...(comTAC ? { tac: { dataAssinatura: tacNovoForm.dataAssinatura, firmadoPor: currentUser, firmadoEm: new Date().toISOString(), obrigacoes: obrigacoesIniciais } } : {}),
           criadoEm: new Date().toISOString(), criadoPor: currentUser,
         });
       });
@@ -729,6 +748,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     setNovoEndereco({ logradouro: '', numero: '', bairro: '', cep: '', cidade: '', uf: '', complemento: '' });
     setEstadoNovoProcesso('');
     setDataInicioPrazoMaster('');
+    setTacNovoForm(tacParaForm(null));
     const msgEstado = estadoInicial === 'triagem' ? 'Remetido à ASSTEC para triagem inicial.' : `Autuado diretamente em "${ESTADOS_AMBIENTAL[estadoInicial]?.label}".`;
     alert(`✅ Processo ${numeroSEITrim} autuado com sucesso!\n\n${msgEstado}`);
     setView('dashboard');
@@ -787,24 +807,48 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   // "TAC Firmado" fecha o incidente e move o processo para Acompanhamento
   // de TACs, com uma ou mais obrigações a cumprir — cada uma com prazo em
   // dias corridos a partir da assinatura, ou data certa.
+  // Formulário de TAC (assinatura + obrigações) compartilhado entre "TAC
+  // Firmado", a autuação direta em Acompanhamento de TACs e a edição de
+  // informações do processo. Cada item do formulário pode trazer o `id` de
+  // uma obrigação já gravada — assim a edição preserva status e histórico.
+  const TAC_OBRIGACAO_VAZIA = { texto: '', tipoPrazo: 'dias', prazoDias: '', dataLimite: '' };
+  const tacParaForm = (tac) => ({
+    dataAssinatura: tac?.dataAssinatura || '',
+    obrigacoes: (tac?.obrigacoes || []).length
+      ? tac.obrigacoes.map((o) => ({ id: o.id, status: o.status, texto: o.texto || '', tipoPrazo: o.tipoPrazo || 'data', prazoDias: o.prazoDias ? String(o.prazoDias) : '', dataLimite: o.dataLimite || '' }))
+      : [{ ...TAC_OBRIGACAO_VAZIA }],
+  });
+  const erroFormTAC = (form) => {
+    const preenchidas = form.obrigacoes.filter((o) => o.texto.trim());
+    if (preenchidas.some((o) => (o.tipoPrazo === 'dias' ? !(Number(o.prazoDias) > 0) : !o.dataLimite))) return 'Informe o prazo (em dias ou data certa) de todas as obrigações do TAC.';
+    if (preenchidas.some((o) => o.tipoPrazo === 'dias') && !form.dataAssinatura) return 'Informe a data de assinatura do TAC — é dela que contam os prazos em dias.';
+    return null;
+  };
+  // Monta as obrigações para gravar. Obrigação já existente mantém id,
+  // status e histórico; se o prazo em dias e a data de assinatura não
+  // mudaram, mantém também a data limite gravada (que pode ter sido
+  // prorrogada) em vez de recalculá-la.
+  const montarObrigacoesTAC = (form, anteriores = [], assinaturaAnterior = null) => form.obrigacoes
+    .filter((o) => o.texto.trim())
+    .map((o, idx) => {
+      const antiga = o.id ? anteriores.find((a) => a.id === o.id) : null;
+      const mesmoPrazo = antiga && o.tipoPrazo === 'dias' && antiga.tipoPrazo === 'dias'
+        && Number(o.prazoDias) === Number(antiga.prazoDias) && form.dataAssinatura === assinaturaAnterior;
+      const dataLimite = o.tipoPrazo === 'dias'
+        ? (mesmoPrazo ? antiga.dataLimite : calcularPrazoDias(form.dataAssinatura, Number(o.prazoDias)).fim)
+        : o.dataLimite;
+      return {
+        ...(antiga || { id: `${Date.now()}_${idx}`, status: 'pendente', historico: [] }),
+        texto: o.texto.trim(),
+        tipoPrazo: o.tipoPrazo,
+        prazoDias: o.tipoPrazo === 'dias' ? Number(o.prazoDias) : null,
+        dataLimite,
+      };
+    });
+
   const firmarTAC = async (p) => {
     const inc = p.incidente;
-    const obrigacoes = tacForm.obrigacoes
-      .filter((o) => o.texto.trim())
-      .map((o, idx) => {
-        const dataLimite = o.tipoPrazo === 'dias'
-          ? calcularPrazoDias(tacForm.dataAssinatura, Number(o.prazoDias)).fim
-          : o.dataLimite;
-        return {
-          id: `${Date.now()}_${idx}`,
-          texto: o.texto.trim(),
-          tipoPrazo: o.tipoPrazo,
-          prazoDias: o.tipoPrazo === 'dias' ? Number(o.prazoDias) : null,
-          dataLimite,
-          status: 'pendente', // pendente | cumprida | descumprida
-          historico: [],
-        };
-      });
+    const obrigacoes = montarObrigacoesTAC(tacForm);
     await updateDoc(doc(db, 'processosAmbientais', p.id), {
       estado: 'acompanhamento_tacs',
       entradaNoEstadoEm: new Date().toISOString(),
@@ -1095,6 +1139,49 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     setShowExportModal(false);
   };
 
+  const renderFormTAC = (form, setForm) => {
+    const alterar = (idx, campos) => { const obs = [...form.obrigacoes]; obs[idx] = { ...obs[idx], ...campos }; setForm({ ...form, obrigacoes: obs }); };
+    return (
+      <>
+        <div className="form-group">
+          <label>Data de Assinatura do TAC *</label>
+          <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: '2px 0 6px' }}>É a partir dela que os prazos em dias das obrigações abaixo são contados.</p>
+          <input type="date" value={form.dataAssinatura} onChange={(e) => setForm({ ...form, dataAssinatura: e.target.value })} />
+        </div>
+        <label style={{ display: 'block', margin: '14px 0 8px', fontWeight: 600, fontSize: '13px' }}>Obrigações Assumidas</label>
+        {form.obrigacoes.map((o, idx) => (
+          <div key={o.id || idx} className="pa-tac-obrigacao-row">
+            {o.status && o.status !== 'pendente' && (
+              <span style={{ fontSize: '11px', fontWeight: 700, color: o.status === 'cumprida' ? 'var(--accent-green, #3F8F5F)' : 'var(--accent-red, #B14C40)' }}>
+                {o.status === 'cumprida' ? '✅ Cumprida' : '❌ Descumprida'}
+              </span>
+            )}
+            <textarea placeholder="Descreva a obrigação..." value={o.texto} style={{ width: '100%', minHeight: '70px', resize: 'vertical' }}
+              onChange={(e) => alterar(idx, { texto: e.target.value })} />
+            <div className="pa-tac-obrigacao-prazo">
+              <select value={o.tipoPrazo} style={{ width: '100%', padding: '10px 8px', border: '1px solid var(--neutral-300)', borderRadius: '8px', background: 'var(--bg-card)', color: 'var(--text-primary)' }}
+                onChange={(e) => alterar(idx, { tipoPrazo: e.target.value })}>
+                <option value="dias">Dias</option>
+                <option value="data">Data certa</option>
+              </select>
+              {o.tipoPrazo === 'dias' ? (
+                <input type="number" min="1" placeholder="Quantos dias" value={o.prazoDias} style={{ width: '100%' }}
+                  onChange={(e) => alterar(idx, { prazoDias: e.target.value })} />
+              ) : (
+                <input type="date" value={o.dataLimite} style={{ width: '100%' }}
+                  onChange={(e) => alterar(idx, { dataLimite: e.target.value })} />
+              )}
+              {form.obrigacoes.length > 1 ? (
+                <button type="button" className="btn-icon" title="Remover obrigação" onClick={() => setForm({ ...form, obrigacoes: form.obrigacoes.filter((_, i) => i !== idx) })}>✕</button>
+              ) : <span />}
+            </div>
+          </div>
+        ))}
+        <button type="button" className="link-btn" onClick={() => setForm({ ...form, obrigacoes: [...form.obrigacoes, { ...TAC_OBRIGACAO_VAZIA }] })}>+ Adicionar obrigação</button>
+      </>
+    );
+  };
+
   // Formulário de arquivamento com motivo obrigatório — sempre exibido ao
   // lado do botão "Gerar Incidente", no rodapé do processo.
   const renderArquivarInline = (p) => (
@@ -1289,6 +1376,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '14px' }}>
               TAC assinado em {p.tac?.dataAssinatura ? new Date(p.tac.dataAssinatura + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}. Quando todas as obrigações estiverem cumpridas, o processo é arquivado automaticamente.
             </p>
+            {obrigacoes.length === 0 && (
+              <p style={{ fontSize: '13px', color: 'var(--accent-red, #B14C40)', fontWeight: 600, marginBottom: '14px' }}>Nenhuma obrigação cadastrada — inclua-as em "✏️ Editar Informações do Processo".</p>
+            )}
             {pendentesVencidas.length > 0 && (
               <>
                 <label style={{ display: 'block', color: 'var(--accent-red, #B14C40)', fontWeight: 700, marginBottom: '8px' }}>⏰ Obrigações Vencidas — decisão necessária</label>
@@ -1542,6 +1632,13 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                   <option key={id} value={id}>{e.label}</option>
                 ))}
               </select>
+            </div>
+          )}
+          {estadoNovoProcesso === 'acompanhamento_tacs' && (
+            <div className="form-section" style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', marginBottom: '10px' }}>📝 TAC — Obrigações e Prazos</label>
+              <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: '0 0 10px' }}>Opcional agora — as obrigações também podem ser incluídas depois, em "Editar Informações".</p>
+              {renderFormTAC(tacNovoForm, setTacNovoForm)}
             </div>
           )}
           {CAMPO_DATA_POR_ESTADO_PRAZO[estadoNovoProcesso] && (
@@ -1962,6 +2059,12 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                     <input type="checkbox" checked={editForm.reparacaoDano} onChange={(e) => setEditForm({ ...editForm, reparacaoDano: e.target.checked })} />
                     <span>🌱 Acompanhamento de Reparação do Dano <em>— pisca em vermelho a cada 3 meses, sem afetar o trâmite</em></span>
                   </label>
+                  {tacEditForm && (
+                    <div className="form-section" style={{ marginBottom: '14px' }}>
+                      <label style={{ display: 'block', marginBottom: '10px' }}>📝 TAC — Obrigações e Prazos</label>
+                      {renderFormTAC(tacEditForm, setTacEditForm)}
+                    </div>
+                  )}
                   <div className="form-actions">
                     <button className="btn-primary" onClick={() => (editForm.reparacaoDano && !selected.reparacaoDano?.ativo
                       ? perguntarPendenciaReparacao((imediata) => salvarEdicaoInfo(selected, imediata))
@@ -1970,7 +2073,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                   </div>
                 </>
               ) : (
-                <button className="btn-secondary" onClick={() => { setEditForm({ numeroSEI: selected.numeroSEI, parte: selected.parte, cpfCnpj: selected.cpfCnpj || '', valorMulta: String(selected.valorMulta || ''), reparacaoDano: !!selected.reparacaoDano?.ativo }); setEditandoInfo(true); }}>
+                <button className="btn-secondary" onClick={() => { setEditForm({ numeroSEI: selected.numeroSEI, parte: selected.parte, cpfCnpj: selected.cpfCnpj || '', valorMulta: String(selected.valorMulta || ''), reparacaoDano: !!selected.reparacaoDano?.ativo }); setTacEditForm(selected.estado === 'acompanhamento_tacs' || selected.tac ? tacParaForm(selected.tac) : null); setEditandoInfo(true); }}>
                   Editar Informações
                 </button>
               )}
@@ -2036,39 +2139,10 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                 showTacForm ? (
                   <div className="form-section" style={{ marginTop: '10px' }}>
                     <label style={{ display: 'block', marginBottom: '10px' }}>📝 TAC Firmado — Obrigações e Prazos</label>
-                    <div className="form-group">
-                      <label>Data de Assinatura do TAC *</label>
-                      <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: '2px 0 6px' }}>É a partir dela que os prazos em dias das obrigações abaixo são contados.</p>
-                      <input type="date" value={tacForm.dataAssinatura} onChange={(e) => setTacForm({ ...tacForm, dataAssinatura: e.target.value })} />
-                    </div>
-                    <label style={{ display: 'block', margin: '14px 0 8px', fontWeight: 600, fontSize: '13px' }}>Obrigações Assumidas</label>
-                    {tacForm.obrigacoes.map((o, idx) => (
-                      <div key={idx} className="pa-tac-obrigacao-row">
-                        <textarea placeholder="Descreva a obrigação..." value={o.texto} style={{ width: '100%', minHeight: '70px', resize: 'vertical' }}
-                          onChange={(e) => { const obs = [...tacForm.obrigacoes]; obs[idx] = { ...obs[idx], texto: e.target.value }; setTacForm({ ...tacForm, obrigacoes: obs }); }} />
-                        <div className="pa-tac-obrigacao-prazo">
-                          <select value={o.tipoPrazo} style={{ width: '100%', padding: '10px 8px', border: '1px solid var(--neutral-300)', borderRadius: '8px', background: 'var(--bg-card)', color: 'var(--text-primary)' }}
-                            onChange={(e) => { const obs = [...tacForm.obrigacoes]; obs[idx] = { ...obs[idx], tipoPrazo: e.target.value }; setTacForm({ ...tacForm, obrigacoes: obs }); }}>
-                            <option value="dias">Dias</option>
-                            <option value="data">Data certa</option>
-                          </select>
-                          {o.tipoPrazo === 'dias' ? (
-                            <input type="number" min="1" placeholder="Quantos dias" value={o.prazoDias} style={{ width: '100%' }}
-                              onChange={(e) => { const obs = [...tacForm.obrigacoes]; obs[idx] = { ...obs[idx], prazoDias: e.target.value }; setTacForm({ ...tacForm, obrigacoes: obs }); }} />
-                          ) : (
-                            <input type="date" value={o.dataLimite} style={{ width: '100%' }}
-                              onChange={(e) => { const obs = [...tacForm.obrigacoes]; obs[idx] = { ...obs[idx], dataLimite: e.target.value }; setTacForm({ ...tacForm, obrigacoes: obs }); }} />
-                          )}
-                          {tacForm.obrigacoes.length > 1 ? (
-                            <button type="button" className="btn-icon" title="Remover obrigação" onClick={() => setTacForm({ ...tacForm, obrigacoes: tacForm.obrigacoes.filter((_, i) => i !== idx) })}>✕</button>
-                          ) : <span />}
-                        </div>
-                      </div>
-                    ))}
-                    <button type="button" className="link-btn" onClick={() => setTacForm({ ...tacForm, obrigacoes: [...tacForm.obrigacoes, { texto: '', tipoPrazo: 'dias', prazoDias: '', dataLimite: '' }] })}>+ Adicionar obrigação</button>
+                    {renderFormTAC(tacForm, setTacForm)}
                     <div className="form-actions" style={{ marginTop: '14px' }}>
                       <button className="btn-primary"
-                        disabled={!tacForm.dataAssinatura || !tacForm.obrigacoes.some((o) => o.texto.trim() && (o.tipoPrazo === 'dias' ? o.prazoDias : o.dataLimite))}
+                        disabled={!tacForm.dataAssinatura || !tacForm.obrigacoes.some((o) => o.texto.trim()) || !!erroFormTAC(tacForm)}
                         onClick={() => pedirConfirmacao('Confirma a assinatura do TAC com as obrigações informadas? O processo seguirá para Acompanhamento de TACs.', () => firmarTAC(selected))}>
                         Confirmar TAC Firmado
                       </button>
