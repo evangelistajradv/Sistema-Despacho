@@ -37,6 +37,7 @@ const ESTADOS_AMBIENTAL = {
   pendente_despacho_consema:            { label: 'Pendente de Despacho/Remessa para CONSEMA',            nucleo: 'asstec',       ordem: 13 },
   cobranca_administrativa:              { label: 'Cobrança Administrativa Ativa',                        nucleo: 'ambos',        ordem: 14, auto: true },
   pendente_envio_pge:                   { label: 'Pendente de Envio para PGE',                            nucleo: 'asstec',       ordem: 15 },
+  remetido_ministerio_publico:          { label: 'Remetido ao Ministério Público',                       nucleo: 'asstec',       ordem: 15.5 },
   arquivado:                            { label: 'Processos Arquivados',                                 nucleo: 'ambos',        ordem: 16 },
 };
 
@@ -331,6 +332,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       entradaNoEstadoEm: new Date().toISOString(),
       vistoPor: {},
       historico,
+      diligenciaOrigem: null,
       ...extra,
     });
   };
@@ -892,6 +894,75 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const temObrigacaoVencida = (p) => (p.tac?.obrigacoes || []).some(obrigacaoVencida);
   const contarTACsVencidos = () => contarEstado('acompanhamento_tacs').filter(temObrigacaoVencida).length;
 
+  // ─── Diligência de verificação (TAC descumprido / Reparação do Dano) ──
+  // O processo vai para "Pendente de Diligência" guardando de onde veio
+  // (diligenciaOrigem). Vindo do TAC, continua espelhado no card de
+  // Acompanhamento de TACs; vindo da reparação, segue no card de Reparação
+  // do Dano (que é um marcador). No retorno, o Núcleo de Notificações
+  // informa o resultado conforme a origem, ou remete ao Ministério Público.
+  const RESULTADOS_DILIGENCIA = {
+    tac_cumprida: 'Obrigação do TAC cumprida',
+    tac_descumprida: 'Obrigação do TAC descumprida',
+    reparacao_nao_cumprida: 'Obrigação de reparação ainda não cumprida',
+    reparacao_cumprida: 'Reparação do dano cumprida',
+    ministerio_publico: 'Enviado ao Ministério Público',
+  };
+  const enviarDiligenciaVerificacao = async (p, tipo) => {
+    const agora = new Date().toISOString();
+    const obrigacaoIds = tipo === 'tac' ? (p.tac?.obrigacoes || []).filter((o) => o.status === 'descumprida').map((o) => o.id) : [];
+    await updateDoc(doc(db, 'processosAmbientais', p.id), {
+      estado: 'pendente_diligencia',
+      entradaNoEstadoEm: agora,
+      vistoPor: {},
+      concluido: false,
+      diligenciaOrigem: { tipo, obrigacaoIds, estadoAnterior: p.estado, concluidoAnterior: !!p.concluido, enviadoEm: agora, enviadoPor: currentUser },
+      historico: [...(p.historico || []), { de: p.estado, para: 'pendente_diligencia', em: agora, por: currentUser, tipo: 'manual', motivo: tipo === 'tac' ? 'Verificação de obrigação descumprida do TAC' : 'Verificação da reparação do dano' }],
+    });
+  };
+  const concluirDiligenciaVerificacao = async (p, resultado) => {
+    const origem = p.diligenciaOrigem || {};
+    const agora = new Date().toISOString();
+    const rotulo = RESULTADOS_DILIGENCIA[resultado];
+    const updates = {};
+    let destino = 'aguardando_saneamento';
+    if (resultado === 'ministerio_publico') {
+      destino = 'remetido_ministerio_publico';
+    } else if (resultado.startsWith('reparacao')) {
+      // Volta para onde estava antes (o acompanhamento de reparação é um
+      // marcador, não um estado), inclusive concluído/arquivado.
+      destino = origem.estadoAnterior || 'aguardando_saneamento';
+      updates.concluido = !!origem.concluidoAnterior;
+    }
+    if (resultado === 'tac_cumprida') {
+      updates.tac = {
+        ...p.tac,
+        obrigacoes: (p.tac?.obrigacoes || []).map((o) => ((origem.obrigacaoIds || []).includes(o.id)
+          ? { ...o, status: 'cumprida', historico: [...(o.historico || []), { decisao: 'cumprida', em: agora, por: currentUser, justificativa: 'Cumprimento verificado em diligência' }] }
+          : o)),
+      };
+    }
+    if (p.reparacaoDano?.ativo && (resultado.startsWith('reparacao') || origem.tipo === 'reparacao')) {
+      const r = p.reparacaoDano;
+      updates.reparacaoDano = {
+        ...r,
+        pendenciaImediata: false,
+        ultimaVerificacaoEm: agora,
+        verificacoes: [...(r.verificacoes || []), { em: agora, por: currentUser, observacao: `Diligência: ${rotulo.toLowerCase()}` }],
+        ...(resultado === 'reparacao_cumprida' ? { ativo: false, removidoEm: agora, removidoPor: currentUser } : {}),
+      };
+    }
+    await updateDoc(doc(db, 'processosAmbientais', p.id), {
+      estado: destino,
+      entradaNoEstadoEm: agora,
+      vistoPor: {},
+      diligenciaOrigem: null,
+      ultimaDiligenciaVerificacao: { ...origem, resultado, rotulo, concluidaEm: agora, concluidaPor: currentUser },
+      historico: [...(p.historico || []), { de: 'pendente_diligencia', para: destino, em: agora, por: currentUser, tipo: 'manual', motivo: rotulo }],
+      ...updates,
+    });
+  };
+  const emDiligenciaDeTAC = (p) => p.estado === 'pendente_diligencia' && p.diligenciaOrigem?.tipo === 'tac';
+
   // "Pedido de Prioridade": ferramenta interna da ASSTEC, invisível para a
   // consulta pública e para o Núcleo de Notificações.
   const marcarPedidoPrioridade = async (p, valor) => {
@@ -979,7 +1050,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const ESTADOS_FORA_DO_FLUXO_PRINCIPAL = ['ar_sem_retorno_rastreio', 'ar_sem_retorno_rastreio_decisao'];
   // Acompanhamento de TACs também sai do fluxo sequencial — vira um card
   // próprio, ao lado do de Processos em Incidente, do qual se origina.
-  const TODOS_ESTADOS_ESPECIAIS = [...ESTADOS_FORA_DO_FLUXO_PRINCIPAL, 'acompanhamento_tacs'];
+  const TODOS_ESTADOS_ESPECIAIS = [...ESTADOS_FORA_DO_FLUXO_PRINCIPAL, 'acompanhamento_tacs', 'remetido_ministerio_publico'];
   // Número do passo de cada estado no fluxo principal — fixo para todas as
   // visões, para que "passo 7" signifique a mesma coisa para todo mundo.
   const NUMERO_PASSO = Object.fromEntries(Object.entries(ESTADOS_AMBIENTAL)
@@ -1001,6 +1072,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   // Exibido no topo da tela, inclusive na consulta pública.
   const totalTramitando = useMemo(() => processos.filter((p) => p.estado !== 'arquivado').length, [processos]);
   const incidentesAtivos = useMemo(() => processos.filter((p) => p.incidente?.ativo), [processos]);
+  // Processos de TAC em diligência continuam espelhados no card de TACs.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const tacsEmDiligencia = useMemo(() => processos.filter((p) => !p.incidente?.ativo && emDiligenciaDeTAC(p)), [processos]);
   // Sub Judice não é um estado exclusivo — o processo continua seu trâmite
   // normal e, ao mesmo tempo, aparece marcado no card especial da dashboard.
   const subJudiceAtivos = useMemo(() => processos.filter((p) => p.subJudice && !p.concluido), [processos]);
@@ -1087,7 +1161,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     if (!estadoFiltro && (nucleoView === 'todos' || nucleoView === 'asstec')) {
       lista = [...lista, ...incidentesAtivos];
     }
-    if (estadoFiltro) lista = lista.filter((p) => p.estado === estadoFiltro);
+    if (estadoFiltro) lista = lista.filter((p) => p.estado === estadoFiltro || (estadoFiltro === 'acompanhamento_tacs' && emDiligenciaDeTAC(p)));
     if (nucleoFiltro !== 'todos') lista = lista.filter((p) => ESTADOS_AMBIENTAL[p.estado]?.nucleo === nucleoFiltro || ESTADOS_AMBIENTAL[p.estado]?.nucleo === 'ambos');
     lista = filtrarBusca(lista);
     // Processos urgentes sempre no topo, em ordem cronológica entre si (o
@@ -1295,13 +1369,26 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       case 'pendente_certificacao_edital':
         return <button className="btn-approve" onClick={() => pedirConfirmacao('Certificar o decurso do prazo do edital? O processo seguirá para Saneamento/Julgamento.', () => certificarEdital(p))}>Certificar Decurso do Prazo</button>;
 
-      case 'aguardando_saneamento':
+      case 'aguardando_saneamento': {
+        const retorno = p.ultimaDiligenciaVerificacao?.concluidaEm === p.entradaNoEstadoEm ? p.ultimaDiligenciaVerificacao : null;
         return (
+          <>
+          {retorno && (
+            <div className="info-box" style={{ marginBottom: '12px' }}>
+              <label>🔎 Retorno de Diligência</label>
+              <p style={{ fontSize: '13px' }}><strong>{retorno.rotulo}</strong> — em {new Date(retorno.concluidaEm).toLocaleDateString('pt-BR')} por {ALL_USERS?.[retorno.concluidaPor]?.nome || retorno.concluidaPor}</p>
+            </div>
+          )}
           <div className="action-buttons">
+            {p.tac && (
+              <button className="btn-secondary" onClick={() => pedirConfirmacao('Devolver este processo ao Acompanhamento de TACs?', () => moverProcesso(p, 'acompanhamento_tacs'))}>↩ Devolver ao Acompanhamento de TACs</button>
+            )}
             <button className="btn-secondary" onClick={() => pedirConfirmacao('Converter este processo em Diligência?', () => moverProcesso(p, 'pendente_diligencia'))}>Converter em Diligência</button>
             <button className="btn-primary" onClick={() => pedirConfirmacao('Disponibilizar este processo para Análise de Minuta pelo Gabinete?', () => moverProcesso(p, 'aguardando_analise_minuta_gabinete'))}>Disponibilizar para o Gabinete</button>
           </div>
+          </>
         );
+      }
 
       case 'aguardando_analise_minuta_gabinete':
         return <button className="btn-primary" onClick={() => pedirConfirmacao('Confirma que a minuta foi analisada pelo Gabinete? O processo seguirá para triagem de despacho/notificação.', () => moverProcesso(p, 'triagem_despacho_notificacao_decisao'))}>Minuta Analisada → Triagem de Despacho</button>;
@@ -1311,10 +1398,40 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
 
       case 'pendente_diligencia': {
         const dias = diasNoEstado(p.entradaNoEstadoEm);
+        const origem = p.diligenciaOrigem;
+        const obrigacoesVerificadas = (p.tac?.obrigacoes || []).filter((o) => (origem?.obrigacaoIds || []).includes(o.id));
+        const botaoMP = (
+          <button className="btn-secondary" onClick={() => pedirConfirmacao('Enviar este processo ao Ministério Público?', () => concluirDiligenciaVerificacao(p, 'ministerio_publico'))}>🏛️ Enviar ao Ministério Público</button>
+        );
         return (
           <>
             {dias > 7 && <div className="alert-banner warning" style={{ marginBottom: '12px' }}>⏰ Fora do prazo — processo parado há {dias} dias nesta etapa (prazo de cumprimento: 7 dias).</div>}
-            <button className="btn-primary" onClick={() => pedirConfirmacao('Confirma que a diligência foi cumprida? O processo será devolvido à Conclusão de Julgamento.', () => moverProcesso(p, 'aguardando_saneamento'))}>Diligência Cumprida → Devolver à Conclusão de Julgamento</button>
+            {origem?.tipo === 'tac' ? (
+              <div className="info-box">
+                <label>🔎 Diligência — verificação de obrigação do TAC</label>
+                {obrigacoesVerificadas.length > 0 && (
+                  <ul style={{ fontSize: '13px', margin: '4px 0 10px', paddingLeft: '18px' }}>
+                    {obrigacoesVerificadas.map((o) => <li key={o.id}>{o.texto}</li>)}
+                  </ul>
+                )}
+                <div className="action-buttons">
+                  <button className="btn-approve" onClick={() => pedirConfirmacao('Confirma que a obrigação do TAC foi CUMPRIDA? O processo será devolvido para Saneamento/Julgamento.', () => concluirDiligenciaVerificacao(p, 'tac_cumprida'))}>✅ Obrigação do TAC Cumprida</button>
+                  <button className="btn-delete" onClick={() => pedirConfirmacao('Confirma que a obrigação do TAC continua DESCUMPRIDA? O processo será devolvido para Saneamento/Julgamento.', () => concluirDiligenciaVerificacao(p, 'tac_descumprida'))}>❌ Obrigação do TAC Descumprida</button>
+                  {botaoMP}
+                </div>
+              </div>
+            ) : origem?.tipo === 'reparacao' ? (
+              <div className="info-box">
+                <label>🔎 Diligência — verificação da reparação do dano</label>
+                <div className="action-buttons" style={{ marginTop: '8px' }}>
+                  <button className="btn-primary" onClick={() => pedirConfirmacao('Confirma que a obrigação de reparação AINDA NÃO foi cumprida? O processo volta para onde estava e segue no Acompanhamento de Reparação do Dano (próximo alerta em 3 meses).', () => concluirDiligenciaVerificacao(p, 'reparacao_nao_cumprida'))}>🌱 Reparação Ainda Não Cumprida → Voltar ao Acompanhamento</button>
+                  <button className="btn-approve" onClick={() => pedirConfirmacao('Confirma que a reparação do dano foi CUMPRIDA? O processo volta para onde estava e sai do Acompanhamento de Reparação do Dano.', () => concluirDiligenciaVerificacao(p, 'reparacao_cumprida'))}>✅ Reparação Cumprida</button>
+                  {botaoMP}
+                </div>
+              </div>
+            ) : (
+              <button className="btn-primary" onClick={() => pedirConfirmacao('Confirma que a diligência foi cumprida? O processo será devolvido à Conclusão de Julgamento.', () => moverProcesso(p, 'aguardando_saneamento'))}>Diligência Cumprida → Devolver à Conclusão de Julgamento</button>
+            )}
           </>
         );
       }
@@ -1371,8 +1488,15 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           </div>
         );
 
+        const descumpridas = obrigacoes.filter((o) => o.status === 'descumprida');
         return (
           <div>
+            {descumpridas.length > 0 && (
+              <div className="alert-banner warning" style={{ marginBottom: '14px', display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>❌ {descumpridas.length} obrigação(ões) descumprida(s).</span>
+                <button className="btn-secondary" onClick={() => pedirConfirmacao('Enviar este processo para Pendente de Diligência, para verificar o cumprimento da(s) obrigação(ões) descumprida(s)? Ele continua espelhado no Acompanhamento de TACs e, cumprida a diligência, volta para Saneamento/Julgamento.', () => enviarDiligenciaVerificacao(p, 'tac'))}>🔎 Enviar para Diligência</button>
+              </div>
+            )}
             <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '14px' }}>
               TAC assinado em {p.tac?.dataAssinatura ? new Date(p.tac.dataAssinatura + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}. Quando todas as obrigações estiverem cumpridas, o processo é arquivado automaticamente.
             </p>
@@ -1442,6 +1566,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           </div>
         );
 
+      case 'remetido_ministerio_publico':
+        return <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Processo remetido ao Ministério Público{p.ultimaDiligenciaVerificacao?.resultado === 'ministerio_publico' ? ` em ${new Date(p.ultimaDiligenciaVerificacao.concluidaEm).toLocaleDateString('pt-BR')}` : ''}. Use "Alterar Estado" ou "Arquivar processo" quando houver retorno.</p>;
+
       case 'pendente_envio_pge':
         return (
           <div className="info-box">
@@ -1504,7 +1631,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
             </div>
           )}
 
-          {!publico && (nucleoView === 'todos' || nucleoView === 'asstec') && (incidentesAtivos.length > 0 || subJudiceAtivos.length > 0 || contarEstado('acompanhamento_tacs').length > 0 || reparacaoAtivos.length > 0) && (
+          {!publico && (nucleoView === 'todos' || nucleoView === 'asstec') && (incidentesAtivos.length > 0 || subJudiceAtivos.length > 0 || contarEstado('acompanhamento_tacs').length + tacsEmDiligencia.length > 0 || reparacaoAtivos.length > 0 || contarEstado('remetido_ministerio_publico').length > 0) && (
             <div className="pa-dash-grid" style={{ marginBottom: '18px' }}>
               {incidentesAtivos.length > 0 && (
                 <div className="pa-card pa-card-incident" onClick={() => { setEstadoFiltro('__incidente__'); setView('lista'); }}>
@@ -1518,11 +1645,12 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                   <span className="pa-card-label">⚖️ Processos Sub Judice</span>
                 </div>
               )}
-              {contarEstado('acompanhamento_tacs').length > 0 && (
+              {contarEstado('acompanhamento_tacs').length + tacsEmDiligencia.length > 0 && (
                 <div className="pa-card pa-card-tac" onClick={() => abrirGrupo('acompanhamento_tacs')}>
-                  <span className="pa-card-count">{contarEstado('acompanhamento_tacs').length}</span>
+                  <span className="pa-card-count">{contarEstado('acompanhamento_tacs').length + tacsEmDiligencia.length}</span>
                   <span className="pa-card-label">📝 Acompanhamento de TACs</span>
                   {contarTACsVencidos() > 0 && <span className="pa-card-urgent-badge">⏰ {contarTACsVencidos()} TAC{contarTACsVencidos() === 1 ? '' : 's'} com Obrigações Vencidas</span>}
+                  {tacsEmDiligencia.length > 0 && <span className="pa-card-new-badge">🔎 {tacsEmDiligencia.length} em diligência</span>}
                 </div>
               )}
               {reparacaoAtivos.length > 0 && (
@@ -1530,6 +1658,12 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                   <span className="pa-card-count">{reparacaoAtivos.length}</span>
                   <span className="pa-card-label">🌱 Acompanhamento de Reparação do Dano</span>
                   {reparacaoPendentes > 0 && <span className="pa-card-urgent-badge">⏰ {reparacaoPendentes} processo{reparacaoPendentes === 1 ? '' : 's'} para verificar/notificar</span>}
+                </div>
+              )}
+              {contarEstado('remetido_ministerio_publico').length > 0 && (
+                <div className="pa-card pa-card-mp" onClick={() => abrirGrupo('remetido_ministerio_publico')}>
+                  <span className="pa-card-count">{contarEstado('remetido_ministerio_publico').length}</span>
+                  <span className="pa-card-label">🏛️ Remetidos ao Ministério Público</span>
                 </div>
               )}
             </div>
@@ -2023,6 +2157,9 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                   </div>
                   <div className="action-buttons">
                     <button className="btn-primary" onClick={() => pedirConfirmacao('Registrar a verificação/notificação da reparação do dano? O próximo alerta será em 3 meses.', () => registrarVerificacaoReparacao(selected, obsVerificacaoReparacao))}>✅ Registrar Verificação/Notificação</button>
+                    {selected.estado !== 'pendente_diligencia' && !selected.incidente?.ativo && (
+                      <button className="btn-secondary" onClick={() => pedirConfirmacao('Enviar este processo para cumprimento de diligência (Pendente de Diligência), para verificar a reparação do dano? No retorno, o Núcleo de Notificações informa o resultado.', () => enviarDiligenciaVerificacao(selected, 'reparacao'))}>🔎 Enviar para Cumprimento de Diligência</button>
+                    )}
                     <button className="link-btn" style={{ fontSize: '12px', color: 'var(--text-secondary)' }} onClick={() => pedirConfirmacao('Retirar este processo do Acompanhamento de Reparação do Dano?', () => marcarReparacaoDano(selected, false))}>Retirar do acompanhamento</button>
                   </div>
                 </>
