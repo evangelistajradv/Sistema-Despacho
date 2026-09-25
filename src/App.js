@@ -35,7 +35,7 @@ const SETOR_POR_USUARIO = {
 };
 
 // Setores da SEMARH que podem solicitar Prioridade de Tramitação (fora "Outros", digitado à mão).
-const SETORES_SEMARH = ['DLA', 'GLA', 'GMDA', 'DCbio', 'GGF', 'GUC', 'GFP', 'DRH', 'GRH', 'GCC', 'DPLA'];
+const SETORES_SEMARH = ['DLA', 'GLA', 'GMDA', 'DCbio', 'GGF', 'GUC', 'GFP', 'DRH', 'GRH', 'GCC', 'DPLA', 'SGE', 'SMA'];
 
 const PRIORIDADE_STATUS = {
   recebido:    { label: 'Recebido',    color: 'blue' },
@@ -502,6 +502,15 @@ export default function SistemaDespacho() {
     if (!window.confirm('Remover este pedido de prioridade de tramitação?')) return;
     await deleteDoc(doc(db, 'prioridades', id));
     setSelectedPriority(null);
+  };
+
+  // Corrige o setor de um pedido já registrado (ex.: solicitante digitou o nome
+  // por extenso em "Outros" e o master quer padronizar com a sigla oficial).
+  const updatePrioritySetor = async (id, novoSetor) => {
+    try {
+      await updateDoc(doc(db, 'prioridades', id), { setorSolicitante: novoSetor });
+      setSelectedPriority((prev) => (prev && prev.id === id ? { ...prev, setorSolicitante: novoSetor } : prev));
+    } catch (e) { console.error('❌ Erro ao atualizar setor da prioridade:', e.message); alert('Erro ao atualizar o setor.'); }
   };
 
   // Amarelo a partir de 5 dias parado sem despacho; vermelho/crítico a partir de 10.
@@ -3714,7 +3723,23 @@ export default function SistemaDespacho() {
                       </span>
                     </div>
                     <div className="info-grid">
-                      <div className="info-item"><label>Setor Solicitante</label><p>{selectedPriority.setorSolicitante}</p></div>
+                      <div className="info-item">
+                        <label>Setor Solicitante</label>
+                        {currentUser === 'master' ? (
+                          <select
+                            value={SETORES_SEMARH.includes(selectedPriority.setorSolicitante) ? selectedPriority.setorSolicitante : 'outros'}
+                            onChange={(e) => e.target.value !== 'outros' && updatePrioritySetor(selectedPriority.id, e.target.value)}
+                            style={{width:'100%', padding:'8px 10px', border:'1px solid var(--neutral-300)', borderRadius:'8px', fontSize:'13.5px', background:'var(--bg-card)', color:'var(--text-primary)'}}
+                          >
+                            {!SETORES_SEMARH.includes(selectedPriority.setorSolicitante) && (
+                              <option value="outros">{selectedPriority.setorSolicitante} (digitado — escolha a sigla certa)</option>
+                            )}
+                            {SETORES_SEMARH.map((s) => <option key={s} value={s}>{s}</option>)}
+                          </select>
+                        ) : (
+                          <p>{selectedPriority.setorSolicitante}</p>
+                        )}
+                      </div>
                       <div className="info-item"><label>Servidor Solicitante</label><p>{selectedPriority.servidorSolicitante}</p></div>
                       <div className="info-item"><label>Data da Solicitação</label><p>{new Date(selectedPriority.dataSolicitacao).toLocaleDateString('pt-BR')}</p></div>
                       <div className="info-item"><label>Atribuído a</label><p>{selectedPriority.atribuidoA ? (ALL_USERS[selectedPriority.atribuidoA]?.nome || selectedPriority.atribuidoA) : 'Ainda não atribuído'}</p></div>
