@@ -230,8 +230,17 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const [dataInicioPrazoMaster, setDataInicioPrazoMaster] = useState('');
   const [editandoDataPrazo, setEditandoDataPrazo] = useState(false);
   const [novaDataPrazo, setNovaDataPrazo] = useState('');
+  // Movimentação em lote: o modo é ativado dentro da lista de um estado e
+  // a seleção sobrevive a abrir um processo e voltar — só some ao clicar em
+  // "Desfazer seleção", "Desativar" ou ao trocar de estado.
+  const [modoLote, setModoLote] = useState(false);
   const [selecionados, setSelecionados] = useState(new Set());
-  const [estadoLote, setEstadoLote] = useState('');
+  const [acaoLoteId, setAcaoLoteId] = useState('');
+  const [estadoLote, setEstadoLote] = useState(''); // destino livre (só administradores)
+  const [dataLoteComum, setDataLoteComum] = useState('');
+  const [motivoLote, setMotivoLote] = useState('');
+  const [datasLote, setDatasLote] = useState({}); // { [processoId]: 'AAAA-MM-DD' } — ex.: recebimento do AR de cada um
+  const [dataPreencherLote, setDataPreencherLote] = useState('');
   const [estadoNovoProcesso, setEstadoNovoProcesso] = useState('');
   // TAC informado já na autuação, quando o estado inicial é Acompanhamento de TACs.
   const [tacNovoForm, setTacNovoForm] = useState({ dataAssinatura: '', obrigacoes: [{ texto: '', tipoPrazo: 'dias', prazoDias: '', dataLimite: '' }] });
@@ -325,17 +334,31 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
-  const moverProcesso = async (p, novoEstado, tipo = 'manual', extra = {}) => {
-    const historico = [...(p.historico || []), { de: p.estado, para: novoEstado, em: new Date().toISOString(), por: currentUser, tipo }];
-    await updateDoc(doc(db, 'processosAmbientais', p.id), {
+  // Campos gravados em toda movimentação de estado — usado tanto no
+  // movimento individual quanto na movimentação em lote.
+  const dadosMovimento = (p, novoEstado, tipo = 'manual', extra = {}, infoHistorico = {}) => {
+    const agora = new Date().toISOString();
+    return {
       estado: novoEstado,
-      entradaNoEstadoEm: new Date().toISOString(),
+      entradaNoEstadoEm: agora,
       vistoPor: {},
-      historico,
+      historico: [...(p.historico || []), { de: p.estado, para: novoEstado, em: agora, por: currentUser, tipo, ...infoHistorico }],
       diligenciaOrigem: null,
       ...extra,
-    });
+    };
   };
+
+  const moverProcesso = async (p, novoEstado, tipo = 'manual', extra = {}) => {
+    await updateDoc(doc(db, 'processosAmbientais', p.id), dadosMovimento(p, novoEstado, tipo, extra));
+  };
+
+  // Data que dispara a contagem de 20 dias (recebimento do AR, publicação
+  // do edital etc.) e o prazo calculado a partir dela.
+  const extraPrazo20Dias = (campoData, valor, estadoDestino) => ({
+    [`datas.${campoData}`]: valor,
+    prazo: { ...calcularPrazo20Dias(valor), origem: estadoDestino },
+  });
+  const extraPrazoCobranca = () => ({ prazo: { inicio: toISODate(new Date()), fim: toISODate(addMeses(new Date(), 3)), origem: 'cobranca_administrativa' } });
 
   // "processosRef" guarda a lista mais recente sem forçar o efeito abaixo a
   // reiniciar seu intervalo a cada gravação de qualquer usuário no banco —
@@ -379,8 +402,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   }, [estadoFiltro, busca, ordem, nucleoFiltro, mostrarConcluidos, view]);
 
   const iniciarPrazo = (p, campoData, valor, estadoDestino) => {
-    const { inicio, fim } = calcularPrazo20Dias(valor);
-    moverProcesso(p, estadoDestino, 'manual', { [`datas.${campoData}`]: valor, prazo: { inicio, fim, origem: estadoDestino } });
+    moverProcesso(p, estadoDestino, 'manual', extraPrazo20Dias(campoData, valor, estadoDestino));
   };
 
   // Mapeia cada estado de contagem automática de prazo (AR/Edital, na etapa
@@ -619,15 +641,18 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   // Arquivamento definitivo — disponível de forma discreta em qualquer
   // processo, e também embutido na etapa de certificação pós-decisão/recurso.
   // Sempre exige motivo e registra quem arquivou.
-  const arquivarProcesso = async (p, motivo) => {
-    const historico = [...(p.historico || []), { de: p.estado, para: 'arquivado', em: new Date().toISOString(), por: currentUser, tipo: 'manual', motivo }];
-    await updateDoc(doc(db, 'processosAmbientais', p.id), {
+  const dadosArquivamento = (p, motivo, infoHistorico = {}) => {
+    const agora = new Date().toISOString();
+    return {
       estado: 'arquivado',
-      entradaNoEstadoEm: new Date().toISOString(),
+      entradaNoEstadoEm: agora,
       vistoPor: {},
-      arquivamento: { motivo, arquivadoEm: new Date().toISOString(), arquivadoPor: currentUser },
-      historico,
-    });
+      arquivamento: { motivo, arquivadoEm: agora, arquivadoPor: currentUser },
+      historico: [...(p.historico || []), { de: p.estado, para: 'arquivado', em: agora, por: currentUser, tipo: 'manual', motivo, ...infoHistorico }],
+    };
+  };
+  const arquivarProcesso = async (p, motivo) => {
+    await updateDoc(doc(db, 'processosAmbientais', p.id), dadosArquivamento(p, motivo));
     setShowArquivarForm(false);
     setMotivoArquivar('');
   };
@@ -664,11 +689,155 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     });
   };
 
-  const moverLote = (lista) => {
-    if (!estadoLote || selecionados.size === 0) return;
-    lista.filter((p) => selecionados.has(p.id)).forEach((p) => moverProcesso(p, estadoLote, 'manual'));
+  // ─── Movimentação em lote ─────────────────────────────────────────
+  // Ações em lote de cada estado — as mesmas do movimento individual (ver
+  // renderAcaoEstado), levando ao estado seguinte. Uma ação pode exigir uma
+  // informação comum a todos (data de publicação, motivo) ou uma data por
+  // processo (retorno de AR: cada um conta o prazo do seu recebimento).
+  // Estados de contagem automática não têm ação em lote — só a
+  // movimentação livre, exclusiva dos administradores.
+  const AVISO_COBRANCA = '💰 O prazo de 3 meses da Cobrança Administrativa será contado a partir de hoje, igual para todos os processos.';
+  const acaoSimples = (id, label, destino, extra = () => ({}), tipo = 'manual') => ({
+    id, label, destinoLabel: ESTADOS_AMBIENTAL[destino].label,
+    ...(destino === 'cobranca_administrativa' ? { aviso: AVISO_COBRANCA } : {}),
+    montar: (p) => dadosMovimento(p, destino, tipo, extra(), { lote: true }),
+  });
+  const acaoIniciarPrazoPorProcesso = (id, label, labelData, campoData, destino) => ({
+    id, label, destinoLabel: ESTADOS_AMBIENTAL[destino].label,
+    entrada: { tipo: 'dataPorProcesso', label: labelData },
+    montar: (p, v) => dadosMovimento(p, destino, 'manual', extraPrazo20Dias(campoData, v.datas[p.id], destino), { lote: true }),
+  });
+  const acoesLotePorEstado = (estado) => {
+    const ciclo = CICLOS_AR[estado];
+    if (ciclo) {
+      return [acaoIniciarPrazoPorProcesso('recebimento', `${ciclo.labelBotaoConfirmar} → Iniciar Prazo`, ciclo.labelData, ciclo.campoData, ciclo.estadoPrazo)];
+    }
+    const origemSemRetorno = Object.keys(CICLOS_AR).find((k) => CICLOS_AR[k].semRetorno === estado);
+    if (origemSemRetorno) {
+      const c = CICLOS_AR[origemSemRetorno];
+      const hoje = () => new Date().toISOString().slice(0, 10);
+      return [
+        acaoSimples('edital', `AR devolvido (destinatário não encontrado) → ${c.labelEdital}`, c.estadoEdital, () => ({ 'datas.arCertificadoRastreioEm': hoje() })),
+        acaoIniciarPrazoPorProcesso('cumprido', 'AR Cumprido (consulta de rastreio) → Iniciar Prazo', 'Data de Recebimento do AR', c.campoData, c.estadoPrazo),
+        acaoSimples('segunda', 'Segunda Notificação Já Enviada → Aguardar Retorno de AR', origemSemRetorno, () => ({ 'datas.segundaNotificacaoEm': hoje() })),
+        acaoSimples('renotificar', `Enviar para ${c.labelNotificacao}`, c.estadoNotificacao),
+      ];
+    }
+    const semRecurso = acaoSimples('sem_recurso', 'Não houve recurso → Cobrança Administrativa', 'cobranca_administrativa', extraPrazoCobranca, 'automatica');
+    const comRecurso = acaoSimples('com_recurso', 'Houve recurso → Despacho ao CONSEMA', 'pendente_despacho_consema', undefined, 'automatica');
+    switch (estado) {
+      case 'triagem':
+        return [acaoSimples('mover', 'Concluir Triagem → Iniciar Notificação', 'pendente_notificacao')];
+      case 'pendente_notificacao':
+        return [acaoSimples('mover', 'Notificação Enviada → Aguardar Retorno de AR', 'pendente_retorno_ar')];
+      case 'pendente_certificacao_ar':
+        return [acaoSimples('mover', 'Processo Certificado → Saneamento/Julgamento', 'aguardando_saneamento', undefined, 'automatica')];
+      case 'pendente_edital':
+      case 'pendente_edital_decisao': {
+        const destino = estado === 'pendente_edital' ? 'aguardando_prazo_edital' : 'aguardando_prazo_recurso_edital';
+        const { campo } = CAMPO_DATA_POR_ESTADO_PRAZO[destino];
+        return [{
+          id: 'edital', label: 'Confirmar Publicação do Edital → Iniciar Prazo', destinoLabel: ESTADOS_AMBIENTAL[destino].label,
+          entrada: { tipo: 'dataComum', label: 'Data de Publicação do Edital' },
+          montar: (p, v) => dadosMovimento(p, destino, 'manual', extraPrazo20Dias(campo, v.data, destino), { lote: true }),
+        }];
+      }
+      case 'pendente_certificacao_edital':
+        return [acaoSimples('mover', 'Certificar Decurso do Prazo → Saneamento/Julgamento', 'aguardando_saneamento', undefined, 'automatica')];
+      case 'aguardando_saneamento':
+        return [
+          acaoSimples('gabinete', 'Disponibilizar para o Gabinete', 'aguardando_analise_minuta_gabinete'),
+          acaoSimples('diligencia', 'Converter em Diligência', 'pendente_diligencia'),
+        ];
+      case 'pendente_diligencia':
+        return [{
+          ...acaoSimples('mover', 'Diligência Cumprida → Devolver à Conclusão de Julgamento', 'aguardando_saneamento'),
+          aplicavel: (p) => !p.diligenciaOrigem?.tipo,
+          motivoInaplicavel: 'Diligência de verificação (TAC/Reparação do Dano): informe o resultado no próprio processo.',
+        }];
+      case 'aguardando_analise_minuta_gabinete':
+        return [acaoSimples('mover', 'Minuta Analisada → Triagem de Despacho', 'triagem_despacho_notificacao_decisao')];
+      case 'triagem_despacho_notificacao_decisao':
+        return [acaoSimples('mover', 'Notificação Confeccionada', 'pendente_notificacao_decisao')];
+      case 'pendente_notificacao_decisao':
+        return [acaoSimples('mover', 'Notificação Enviada → Aguardar Retorno de AR', 'pendente_retorno_ar_decisao')];
+      case 'pendente_certificacao_decisao':
+        return [
+          { ...semRecurso, label: `Notificação entregue, sem recurso → Cobrança Administrativa` },
+          { ...comRecurso, label: 'Notificação entregue, com recurso → Despacho ao CONSEMA' },
+          acaoSimples('nao_entregue', 'Notificação NÃO entregue → Edital da Decisão', 'pendente_edital_decisao', undefined, 'automatica'),
+        ];
+      case 'pendente_certificacao_edital_decisao':
+        return [semRecurso, comRecurso];
+      case 'acompanhamento_tacs':
+        return [acaoSimples('descumprimento', 'Confirmar Descumprimento de TAC → Cobrança Administrativa', 'cobranca_administrativa', extraPrazoCobranca)];
+      case 'pendente_despacho_consema':
+        return [{ id: 'concluir', label: 'Concluir / Arquivar Processo', destinoLabel: 'Concluídos/Arquivados', montar: () => ({ concluido: true, concluidoEm: new Date().toISOString() }) }];
+      case 'pendente_envio_pge':
+      case 'remetido_ministerio_publico':
+        return [{
+          id: 'arquivar', label: 'Arquivar Processo', destinoLabel: ESTADOS_AMBIENTAL.arquivado.label,
+          entrada: { tipo: 'motivo', label: 'Motivo do arquivamento' },
+          montar: (p, v) => dadosArquivamento(p, v.motivo, { lote: true }),
+        }];
+      default:
+        return [];
+    }
+  };
+  // Movimentação livre para qualquer estado — só administradores.
+  const infoPrazoLivre = CAMPO_DATA_POR_ESTADO_PRAZO[estadoLote];
+  const acaoLoteLivre = {
+    id: 'livre', livre: true, label: '⚙️ Mover para outro estado (administrador)',
+    destinoLabel: ESTADOS_AMBIENTAL[estadoLote]?.label,
+    entrada: infoPrazoLivre ? { tipo: 'dataComum', label: infoPrazoLivre.label } : null,
+    aviso: estadoLote === 'cobranca_administrativa' ? AVISO_COBRANCA : null,
+    aplicavel: (p) => p.estado !== estadoLote,
+    montar: (p, v) => {
+      const extra = infoPrazoLivre ? extraPrazo20Dias(infoPrazoLivre.campo, v.data, estadoLote)
+        : estadoLote === 'cobranca_administrativa' ? extraPrazoCobranca() : {};
+      return dadosMovimento(p, estadoLote, 'manual', extra, { lote: true });
+    },
+  };
+
+  const limparSelecaoLote = () => {
     setSelecionados(new Set());
+    setDatasLote({});
+    setDataPreencherLote('');
+  };
+  const desativarLote = () => {
+    limparSelecaoLote();
+    setModoLote(false);
+    setAcaoLoteId('');
     setEstadoLote('');
+    setDataLoteComum('');
+    setMotivoLote('');
+  };
+  // Trocar de estado (ou ir para "Todos os Processos") encerra o lote —
+  // abrir um processo e voltar não, pois o filtro continua o mesmo.
+  useEffect(() => {
+    desativarLote();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [estadoFiltro]);
+
+  // Grava tudo em writeBatch (até 500 operações por lote), em vez de uma
+  // chamada por processo.
+  const executarLote = async (acao, alvo, valores) => {
+    const CHUNK = 450;
+    try {
+      for (let i = 0; i < alvo.length; i += CHUNK) {
+        const lote = writeBatch(db);
+        alvo.slice(i, i + CHUNK).forEach((p) => lote.update(doc(db, 'processosAmbientais', p.id), acao.montar(p, valores)));
+        await lote.commit();
+      }
+    } catch (e) {
+      console.error('❌ Erro na movimentação em lote:', e.message);
+      alert('❌ Erro ao mover os processos em lote. Confira a lista e tente novamente.');
+      return;
+    }
+    limparSelecaoLote();
+    setDataLoteComum('');
+    setMotivoLote('');
+    alert(`✅ ${alvo.length} processo${alvo.length === 1 ? '' : 's'} movimentado${alvo.length === 1 ? '' : 's'} para "${acao.destinoLabel}".`);
   };
 
   const criarProcesso = async (pendenciaImediataReparacao = false) => {
@@ -1196,6 +1365,84 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     return lista;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [processos, ativos, incidentesAtivos, mostrarConcluidos, estadoFiltro, nucleoView, nucleoFiltro, busca, ordem]);
+
+  // ─── Movimentação em lote: o que vale para a lista aberta ────────
+  // Dentro de um estado, quem pode movimentá-lo (núcleo responsável) usa
+  // as ações do próprio estado; administradores também podem escolher
+  // livremente o estado destino — inclusive em "Todos os Processos".
+  const ehAdminAmbiental = !publico && (isMaster || podeAdministrar);
+  const filtroEhEstado = !!ESTADOS_AMBIENTAL[estadoFiltro];
+  const podeAgirNoEstadoLote = filtroEhEstado && !somenteConsulta && (ehAdminAmbiental || nucleoDoEstado(estadoFiltro) === meuNucleo);
+  const acoesEstadoLote = podeAgirNoEstadoLote ? acoesLotePorEstado(estadoFiltro) : [];
+  const acoesLote = [...acoesEstadoLote, ...(ehAdminAmbiental && (filtroEhEstado || !estadoFiltro) ? [acaoLoteLivre] : [])];
+  const loteDisponivel = acoesLote.length > 0;
+  const loteAtivo = modoLote && loteDisponivel;
+  // Com uma única ação no estado, ela já vem escolhida (o administrador
+  // pode trocar pela livre); com várias, o usuário escolhe explicitamente.
+  const acaoLote = acoesLote.find((a) => a.id === acaoLoteId)
+    || (acoesEstadoLote.length === 1 ? acoesEstadoLote[0] : acoesEstadoLote.length === 0 ? acoesLote[0] : null)
+    || null;
+  const aplicavelLote = (p) => {
+    if (p.incidente?.ativo) return false;
+    // Ações do estado só valem para quem de fato está nele (a lista de TACs
+    // também mostra os que estão em diligência).
+    if (!acaoLote?.livre && filtroEhEstado && (p.estado !== estadoFiltro || p.concluido)) return false;
+    return !acaoLote?.aplicavel || acaoLote.aplicavel(p);
+  };
+  const selecionadosLote = loteAtivo ? processos.filter((p) => selecionados.has(p.id) && aplicavelLote(p)) : [];
+  const entradaLote = acaoLote?.entrada || null;
+  const semDataLote = entradaLote?.tipo === 'dataPorProcesso' ? selecionadosLote.filter((p) => !datasLote[p.id]).length : 0;
+  const erroLote = !acaoLote ? 'Escolha a ação a executar.'
+    : selecionadosLote.length === 0 ? 'Marque ao menos um processo.'
+    : acaoLote.livre && !estadoLote ? 'Escolha o estado destino.'
+    : entradaLote?.tipo === 'dataComum' && !dataLoteComum ? `Informe a ${entradaLote.label.toLowerCase()}.`
+    : entradaLote?.tipo === 'motivo' && !motivoLote.trim() ? 'Informe o motivo do arquivamento.'
+    : semDataLote > 0 ? `Informe a ${entradaLote.label.toLowerCase()} de todos os processos marcados (${semDataLote} sem data).`
+    : null;
+
+  const fmtDataBR = (iso) => new Date(iso + 'T12:00:00').toLocaleDateString('pt-BR');
+  const confirmarLote = () => {
+    if (erroLote) return;
+    const acao = acaoLote;
+    const alvo = selecionadosLote;
+    const valores = { data: dataLoteComum, motivo: motivoLote.trim(), datas: { ...datasLote } };
+    const n = alvo.length;
+    const qtd = `${n} processo${n === 1 ? '' : 's'}`;
+    const detalhes = [];
+    let lista = null;
+    if (entradaLote?.tipo === 'dataComum') {
+      detalhes.push(`📅 A MESMA ${entradaLote.label.toLowerCase()} (${fmtDataBR(valores.data)}) será registrada para todos os ${qtd}, e o prazo de 20 dias de cada um será contado a partir dela.`);
+    }
+    if (entradaLote?.tipo === 'motivo') {
+      detalhes.push(`📝 O MESMO motivo de arquivamento será registrado para todos os ${qtd}: "${valores.motivo}".`);
+    }
+    if (entradaLote?.tipo === 'dataPorProcesso') {
+      detalhes.push(`📅 Cada processo terá o prazo de 20 dias contado a partir da sua PRÓPRIA ${entradaLote.label.toLowerCase()}, conforme informado na seleção:`);
+      lista = alvo.map((p) => `${p.numeroSEI} — ${fmtDataBR(valores.datas[p.id])}`);
+    }
+    if (acao.aviso) detalhes.push(acao.aviso);
+    detalhes.push('🧾 A movimentação ficará registrada no histórico de cada processo como feita em lote.');
+    setConfirmAction({
+      titulo: '☑️ Confirmar Movimentação em Lote',
+      mensagem: acao.livre
+        ? `Mover ${qtd} de "${filtroEhEstado ? ESTADOS_AMBIENTAL[estadoFiltro].label : 'Todos os Processos'}" para "${acao.destinoLabel}"?`
+        : `${acao.label}: confirma a movimentação de ${qtd} para "${acao.destinoLabel}"?`,
+      detalhes,
+      lista,
+      onConfirm: () => executarLote(acao, alvo, valores),
+    });
+  };
+
+  // Campo de data de um processo marcado (ex.: recebimento do AR) — abre
+  // automaticamente ao marcar, tanto no card da lista quanto no detalhe.
+  const renderDataLoteProcesso = (p) => (
+    entradaLote?.tipo === 'dataPorProcesso' && selecionados.has(p.id) && aplicavelLote(p) && (
+      <div className="pa-lote-data">
+        <label>📅 {entradaLote.label} *</label>
+        <input type="date" value={datasLote[p.id] || ''} onChange={(e) => { const v = e.target.value; setDatasLote((prev) => ({ ...prev, [p.id]: v })); }} />
+      </div>
+    )
+  );
 
   const nomeUsuario = ALL_USERS?.[currentUser]?.nome || currentUser;
 
@@ -1955,35 +2202,104 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
 
           {(() => {
             const listaExibida = estadoFiltro === '__incidente__' ? filtrarBusca(incidentesAtivos) : estadoFiltro === '__subjudice__' ? filtrarBusca(subJudiceAtivos) : estadoFiltro === '__reparacao__' ? filtrarBusca(reparacaoAtivos) : listaAtual;
-            const podeLote = (isMaster || podeAdministrar) && !estadoFiltro;
+            const selectStyle = { width: '100%', padding: '10px 12px', border: '1px solid var(--neutral-300)', borderRadius: '8px', background: 'var(--bg-card)', color: 'var(--text-primary)' };
+            const aplicaveisVisiveis = loteAtivo ? listaExibida.filter(aplicavelLote) : [];
 
             if (listaExibida.length === 0) return <p className="empty-state">Nenhum processo encontrado</p>;
 
             return (
               <>
-                {podeLote && (
-                  <div className="form-grid" style={{ marginBottom: '14px', alignItems: 'flex-end' }}>
-                    <div className="form-group">
-                      <label>Mover em Lote ({selecionados.size} selecionado{selecionados.size === 1 ? '' : 's'})</label>
-                      <select value={estadoLote} onChange={(e) => setEstadoLote(e.target.value)}
-                        style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--neutral-300)', borderRadius: '8px', background: 'var(--bg-card)', color: 'var(--text-primary)' }}>
-                        <option value="">Selecione o estado destino...</option>
-                        {Object.entries(ESTADOS_AMBIENTAL).sort((a, b) => a[1].ordem - b[1].ordem).map(([id, e]) => (
-                          <option key={id} value={id}>{e.label}</option>
-                        ))}
-                      </select>
+                {loteDisponivel && !modoLote && (
+                  <div style={{ marginBottom: '14px' }}>
+                    <button className="btn-settings" onClick={() => setModoLote(true)}>☑️ Mover em lote</button>
+                  </div>
+                )}
+
+                {loteAtivo && (
+                  <div className="info-box pa-lote-painel">
+                    <div className="pa-lote-cabecalho">
+                      <label style={{ margin: 0 }}>☑️ Movimentação em lote — {selecionadosLote.length} selecionado{selecionadosLote.length === 1 ? '' : 's'}</label>
+                      <div className="action-buttons">
+                        <button type="button" className="link-btn" disabled={aplicaveisVisiveis.length === 0}
+                          onClick={() => setSelecionados((prev) => new Set([...prev, ...aplicaveisVisiveis.map((p) => p.id)]))}>
+                          Selecionar todos ({aplicaveisVisiveis.length})
+                        </button>
+                        {selecionados.size > 0 && (
+                          <button type="button" className="link-btn" onClick={limparSelecaoLote}>↩ Desfazer seleção</button>
+                        )}
+                        <button type="button" className="btn-secondary" onClick={desativarLote}>Desativar</button>
+                      </div>
                     </div>
-                    <div className="form-group" style={{ flex: '0 0 auto' }}>
-                      <button className="btn-primary" disabled={!estadoLote || selecionados.size === 0}
-                        onClick={() => pedirConfirmacao(`Mover ${selecionados.size} processo(s) selecionado(s) para "${ESTADOS_AMBIENTAL[estadoLote]?.label}"?`, () => moverLote(listaExibida))}>
-                        Mover Selecionados
-                      </button>
-                    </div>
-                    {selecionados.size > 0 && (
-                      <div className="form-group" style={{ flex: '0 0 auto' }}>
-                        <button type="button" className="link-btn" onClick={() => setSelecionados(new Set())}>Limpar seleção</button>
+                    <p className="pa-lote-dica">Marque os processos na lista abaixo. Você pode abrir um processo e voltar: a seleção é mantida até clicar em "Desfazer seleção" ou "Desativar".</p>
+
+                    {acoesLote.length > 1 ? (
+                      <div className="form-group">
+                        <label>Ação</label>
+                        <select value={acaoLote?.id || ''} onChange={(e) => setAcaoLoteId(e.target.value)} style={selectStyle}>
+                          {!acaoLote && <option value="">Escolha a ação...</option>}
+                          {acoesLote.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
+                        </select>
+                      </div>
+                    ) : acaoLote && !acaoLote.livre && (
+                      <p style={{ fontSize: '13px', margin: '0 0 10px' }}>Ação: <strong>{acaoLote.label}</strong> <span style={{ color: 'var(--text-secondary)' }}>→ {acaoLote.destinoLabel}</span></p>
+                    )}
+
+                    {acaoLote?.livre && (
+                      <div className="form-group">
+                        <label>Estado destino</label>
+                        <select value={estadoLote} onChange={(e) => { setEstadoLote(e.target.value); setDataLoteComum(''); }} style={selectStyle}>
+                          <option value="">Selecione o estado destino...</option>
+                          {Object.entries(ESTADOS_AMBIENTAL).sort((a, b) => a[1].ordem - b[1].ordem).map(([id, e]) => (
+                            <option key={id} value={id}>{e.label}</option>
+                          ))}
+                        </select>
                       </div>
                     )}
+
+                    {entradaLote?.tipo === 'dataComum' && (
+                      <div className="form-group">
+                        <label>{entradaLote.label} *</label>
+                        <p className="pa-lote-dica">A mesma data será registrada para todos os processos selecionados, e o prazo de 20 dias de cada um será contado a partir dela.</p>
+                        <input type="date" value={dataLoteComum} onChange={(e) => setDataLoteComum(e.target.value)} />
+                      </div>
+                    )}
+
+                    {entradaLote?.tipo === 'motivo' && (
+                      <div className="form-group">
+                        <label>{entradaLote.label} *</label>
+                        <p className="pa-lote-dica">O mesmo motivo será registrado no arquivamento de todos os processos selecionados.</p>
+                        <textarea value={motivoLote} onChange={(e) => setMotivoLote(e.target.value)} placeholder="Descreva o motivo do arquivamento..." />
+                      </div>
+                    )}
+
+                    {entradaLote?.tipo === 'dataPorProcesso' && (
+                      <div className="form-group">
+                        <p className="pa-lote-dica">Ao marcar cada processo, abre-se nele o campo "{entradaLote.label}": o prazo de cada um será contado a partir da sua própria data.</p>
+                        {selecionadosLote.length > 0 && (
+                          <div className="action-buttons" style={{ alignItems: 'center' }}>
+                            <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Preencher os marcados ainda sem data com:</span>
+                            <input type="date" value={dataPreencherLote} onChange={(e) => setDataPreencherLote(e.target.value)} />
+                            <button type="button" className="btn-secondary" disabled={!dataPreencherLote || semDataLote === 0}
+                              onClick={() => setDatasLote((prev) => {
+                                const next = { ...prev };
+                                selecionadosLote.forEach((p) => { if (!next[p.id]) next[p.id] = dataPreencherLote; });
+                                return next;
+                              })}>
+                              Aplicar ({semDataLote})
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {acaoLote?.aviso && <p className="pa-lote-dica">{acaoLote.aviso}</p>}
+
+                    <div className="action-buttons" style={{ alignItems: 'center' }}>
+                      <button className="btn-primary" disabled={!!erroLote} onClick={confirmarLote}>
+                        Mover {selecionadosLote.length} processo{selecionadosLote.length === 1 ? '' : 's'}
+                      </button>
+                      {erroLote && <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{erroLote}</span>}
+                    </div>
                   </div>
                 )}
 
@@ -2016,9 +2332,10 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                       </div>
                     )}
                     <div style={{ display: 'flex', gap: '10px', width: '100%' }}>
-                      {podeLote && (
-                        <input type="checkbox" checked={selecionados.has(p.id)} onChange={() => toggleSelecionado(p.id)}
-                          onClick={(e) => e.stopPropagation()} style={{ marginTop: '4px' }} />
+                      {loteAtivo && (
+                        <input type="checkbox" className="pa-lote-checkbox" checked={selecionados.has(p.id) && aplicavelLote(p)} disabled={!aplicavelLote(p)}
+                          title={aplicavelLote(p) ? 'Marcar para mover em lote' : (acaoLote?.motivoInaplicavel || 'Este processo não pode ser movido pela ação escolhida')}
+                          onChange={() => toggleSelecionado(p.id)} onClick={(e) => e.stopPropagation()} />
                       )}
                       <div style={{ flex: 1, userSelect: 'text' }}>
                         <div className="card-top">
@@ -2051,6 +2368,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                             <strong>🌱 Próxima verificação da reparação:</strong> {proximaVerificacaoReparacao(p).toLocaleDateString('pt-BR')}{verificarReparacao ? ' — verificar e notificar o empreendedor' : ''}
                           </p>
                         )}
+                        {loteAtivo && renderDataLoteProcesso(p)}
                       </div>
                     </div>
                     <button className="btn-secondary" style={{ alignSelf: 'flex-start', marginTop: '4px' }} onClick={() => { setSelectedId(p.id); setView('detalhe'); }}>Ver Detalhes →</button>
@@ -2085,6 +2403,15 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
               {selected.atencao && <span className="card-item-tag card-item-tag-atencao">⚠️ Atenção</span>}
               {selected.orgaoPublico && <span className="card-item-tag card-item-tag-orgao">🏛️ Órgão/Ente Público</span>}
               {podeVerPrioridade && selected.pedidoPrioridade && <span className="card-item-tag card-item-tag-prioridade">⭐ Pedido de Prioridade</span>}
+            </div>
+          )}
+          {loteAtivo && aplicavelLote(selected) && (
+            <div className="info-box pa-lote-painel">
+              <label className="pa-marcador-toggle" style={{ margin: 0 }}>
+                <input type="checkbox" checked={selecionados.has(selected.id)} onChange={() => toggleSelecionado(selected.id)} />
+                <span>☑️ Marcado para mover em lote <em>— {selecionadosLote.length} selecionado{selecionadosLote.length === 1 ? '' : 's'}; volte à lista para concluir a movimentação</em></span>
+              </label>
+              {renderDataLoteProcesso(selected)}
             </div>
           )}
           <div className="info-grid">
@@ -2391,6 +2718,16 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           <div className="modal-box" onClick={(e) => e.stopPropagation()}>
             <h4>{confirmAction.titulo || 'Confirmar Movimentação'}</h4>
             <p style={{ fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '12px' }}>{confirmAction.mensagem}</p>
+            {confirmAction.detalhes?.length > 0 && (
+              <ul className="pa-lote-detalhes">
+                {confirmAction.detalhes.map((d) => <li key={d}>{d}</li>)}
+              </ul>
+            )}
+            {confirmAction.lista?.length > 0 && (
+              <div className="pa-lote-lista">
+                {confirmAction.lista.map((l) => <div key={l}>{l}</div>)}
+              </div>
+            )}
             <div className="modal-actions">
               {confirmAction.opcoes
                 ? confirmAction.opcoes.map((o) => (

@@ -4548,3 +4548,77 @@ button, input, select, textarea {
   .pa-topbar-watermark { display: none; }
   .pa-topbar-stat-label { display: none; }
 }
+
+/* ─── Processo Ambiental: movimentação em lote ─── */
+.pa-lote-painel {
+  margin-bottom: 14px;
+  border-left: 4px solid var(--primary-light);
+}
+
+.pa-lote-cabecalho {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.pa-lote-dica {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 2px 0 10px;
+}
+
+.pa-lote-checkbox {
+  margin-top: 4px;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.pa-lote-checkbox:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.pa-lote-data {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px dashed var(--primary-light);
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.pa-lote-data label {
+  font-size: 12px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.modal-box ul.pa-lote-detalhes {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0 0 12px;
+  padding-left: 18px;
+  line-height: 1.5;
+}
+
+.pa-lote-detalhes li {
+  margin-bottom: 6px;
+}
+
+.pa-lote-lista {
+  max-height: 200px;
+  overflow-y: auto;
+  font-size: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+  line-height: 1.7;
+}
