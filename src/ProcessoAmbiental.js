@@ -195,6 +195,8 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const [selectedId, setSelectedId] = useState(null);
   const [consultaOutroNucleo, setConsultaOutroNucleo] = useState(false);
   const [busca, setBusca] = useState('');
+  // Filtro por marcadores (urgente, atenção, órgão público, sub judice, prioridade) — qualquer um dos marcados
+  const [filtrosMarcadores, setFiltrosMarcadores] = useState([]);
   const [ordem, setOrdem] = useState('antigo'); // antigo | recente
   // Paginação da lista de processos: renderizar centenas de cards de uma vez
   // deixa a página pesada para rolar/interagir. Mostra aos poucos, com
@@ -399,7 +401,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
 
   useEffect(() => {
     setQuantidadeExibida(60);
-  }, [estadoFiltro, busca, ordem, nucleoFiltro, mostrarConcluidos, view]);
+  }, [estadoFiltro, busca, ordem, nucleoFiltro, mostrarConcluidos, view, filtrosMarcadores]);
 
   const iniciarPrazo = (p, campoData, valor, estadoDestino) => {
     moverProcesso(p, estadoDestino, 'manual', extraPrazo20Dias(campoData, valor, estadoDestino));
@@ -2194,6 +2196,27 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
               </div>
             )}
           </div>
+          <div className="pa-filtro-marcadores" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', marginBottom: '14px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>🏷️ Filtrar por marcação:</span>
+            {[
+              ['urgente', '🔴 Urgentes'],
+              ['atencao', '⚠️ Atenção'],
+              ['orgaoPublico', '🏛️ Órgão/Ente Público'],
+              ['subJudice', '⚖️ Sub Judice'],
+              ...(podeVerPrioridade ? [['prioridade', '⭐ Prioridade']] : []),
+            ].map(([chave, rotulo]) => {
+              const ativo = filtrosMarcadores.includes(chave);
+              return (
+                <button key={chave} type="button" className={`btn-settings ${ativo ? 'active' : ''}`} style={{ padding: '6px 12px', fontSize: '12px' }}
+                  onClick={() => setFiltrosMarcadores((f) => (f.includes(chave) ? f.filter((x) => x !== chave) : [...f, chave]))}>
+                  {rotulo}
+                </button>
+              );
+            })}
+            {filtrosMarcadores.length > 0 && (
+              <button type="button" className="link-btn" onClick={() => setFiltrosMarcadores([])}>Limpar filtro</button>
+            )}
+          </div>
           {!estadoFiltro && (
             <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px', fontSize: '13px' }}>
               <input type="checkbox" checked={mostrarConcluidos} onChange={(e) => setMostrarConcluidos(e.target.checked)} /> Mostrar concluídos/arquivados
@@ -2201,7 +2224,8 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
           )}
 
           {(() => {
-            const listaExibida = estadoFiltro === '__incidente__' ? filtrarBusca(incidentesAtivos) : estadoFiltro === '__subjudice__' ? filtrarBusca(subJudiceAtivos) : estadoFiltro === '__reparacao__' ? filtrarBusca(reparacaoAtivos) : listaAtual;
+            const listaBase = estadoFiltro === '__incidente__' ? filtrarBusca(incidentesAtivos) : estadoFiltro === '__subjudice__' ? filtrarBusca(subJudiceAtivos) : estadoFiltro === '__reparacao__' ? filtrarBusca(reparacaoAtivos) : listaAtual;
+            const listaExibida = filtrosMarcadores.length === 0 ? listaBase : listaBase.filter((p) => filtrosMarcadores.some((m) => (m === 'prioridade' ? (podeVerPrioridade && p.pedidoPrioridade) : p[m])));
             const selectStyle = { width: '100%', padding: '10px 12px', border: '1px solid var(--neutral-300)', borderRadius: '8px', background: 'var(--bg-card)', color: 'var(--text-primary)' };
             const aplicaveisVisiveis = loteAtivo ? listaExibida.filter(aplicavelLote) : [];
 
