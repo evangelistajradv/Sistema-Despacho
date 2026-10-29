@@ -4622,3 +4622,25 @@ button, input, select, textarea {
   margin-bottom: 12px;
   line-height: 1.7;
 }
+
+/* Consulta pública: card do estado "Prontos para Julgamento" é clicável e maior */
+.pa-flow-grid .pa-card.pa-card-publico-link {
+  flex: 1 1 320px;
+  max-width: 380px;
+  min-height: 190px;
+  cursor: pointer;
+  border: 2px solid var(--primary-main);
+  background: rgba(37, 66, 117, 0.06);
+}
+.pa-card-publico-link .pa-card-count { font-size: 2.6rem; }
+.pa-card-cta {
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--primary-main);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.3;
+  text-align: center;
+}

@@ -2040,13 +2040,16 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
               return (
                 <React.Fragment key={id}>
                   <div
-                    className={`pa-card ${classeBlink}${publico ? ' pa-card-somente-leitura' : ''}`}
-                    onClick={publico ? undefined : () => abrirGrupo(id)}
+                    className={`pa-card ${classeBlink}${publico && id !== 'processos_prontos_consema' ? ' pa-card-somente-leitura' : ''}${publico && id === 'processos_prontos_consema' ? ' pa-card-publico-link' : ''}`}
+                    onClick={publico ? (id === 'processos_prontos_consema' ? () => setView('prontosConsema') : undefined) : () => abrirGrupo(id)}
                   >
                     <span className="pa-card-step" title={`Passo ${NUMERO_PASSO[id]} do fluxo`}>Passo {NUMERO_PASSO[id]}</span>
                     {setorLabel && <span className="pa-card-sector-badge">{setorLabel}</span>}
                     <span className="pa-card-count">{contarEstado(id).length}</span>
                     <span className="pa-card-label">{est.label}</span>
+                    {publico && id === 'processos_prontos_consema' && (
+                      <span className="pa-card-cta">⚖️ Clique aqui para ver a lista de processos prontos para julgamento</span>
+                    )}
                     {foraPrazo > 0 && <span className="pa-card-urgent-badge">⏰ {foraPrazo} processo{foraPrazo === 1 ? '' : 's'} fora do prazo</span>}
                     {urgentes > 0 && <span className="pa-card-urgent-badge">🔴 Processos urgentes: {urgentes}</span>}
                     {prioridades > 0 && <span className="pa-card-priority-badge">⭐ Pedidos de prioridade: {prioridades}</span>}
@@ -2079,13 +2082,6 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
                   </div>
                 ))}
               </div>
-            </div>
-          )}
-          {publico && (
-            <div style={{ marginTop: '18px', textAlign: 'center' }}>
-              <button type="button" className="btn-new" onClick={() => setView('prontosConsema')}>
-                ⚖️ Clique aqui para ver a lista de processos prontos para julgamento
-              </button>
             </div>
           )}
           {!mostrarLegenda && !publico && (
