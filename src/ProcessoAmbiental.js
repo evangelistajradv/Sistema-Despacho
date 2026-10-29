@@ -35,6 +35,7 @@ const ESTADOS_AMBIENTAL = {
   aguardando_prazo_recurso_edital:      { label: 'Aguardando Decurso do Prazo para Recurso de Edital',   nucleo: 'notificacoes', ordem: 12, auto: true },
   pendente_certificacao_edital_decisao: { label: 'Pendente de Certificação de decurso de prazo de edital com Apresentação de recurso/Não-apresentação de recurso', nucleo: 'notificacoes', ordem: 12.1, certificacao: true },
   pendente_despacho_consema:            { label: 'Pendente de Despacho/Remessa para CONSEMA',            nucleo: 'asstec',       ordem: 13 },
+  processos_prontos_consema:            { label: 'Processos Prontos para Julgamento do CONSEMA',         nucleo: 'asstec',       ordem: 13.5 },
   cobranca_administrativa:              { label: 'Cobrança Administrativa Ativa',                        nucleo: 'ambos',        ordem: 14, auto: true },
   pendente_envio_pge:                   { label: 'Pendente de Envio para PGE',                            nucleo: 'asstec',       ordem: 15 },
   remetido_ministerio_publico:          { label: 'Remetido ao Ministério Público',                       nucleo: 'asstec',       ordem: 15.5 },
@@ -774,6 +775,8 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       case 'acompanhamento_tacs':
         return [acaoSimples('descumprimento', 'Confirmar Descumprimento de TAC → Cobrança Administrativa', 'cobranca_administrativa', extraPrazoCobranca)];
       case 'pendente_despacho_consema':
+        return [acaoSimples('pronto_consema', 'Pronto para julgamento → Processos Prontos para Julgamento do CONSEMA', 'processos_prontos_consema'), { id: 'concluir', label: 'Concluir / Arquivar Processo', destinoLabel: 'Concluídos/Arquivados', montar: () => ({ concluido: true, concluidoEm: new Date().toISOString() }) }];
+      case 'processos_prontos_consema':
         return [{ id: 'concluir', label: 'Concluir / Arquivar Processo', destinoLabel: 'Concluídos/Arquivados', montar: () => ({ concluido: true, concluidoEm: new Date().toISOString() }) }];
       case 'pendente_envio_pge':
       case 'remetido_ministerio_publico':
@@ -1825,12 +1828,20 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
       case 'pendente_despacho_consema':
         return (
           <div className="action-buttons">
+            <button className="btn-approve" onClick={() => pedirConfirmacao('Marcar este processo como pronto para julgamento do CONSEMA? Ele passará a constar na lista pública de processos prontos para julgamento.', () => moverProcesso(p, 'processos_prontos_consema'))}>Pronto para Julgamento do CONSEMA</button>
             <button className="btn-primary" onClick={() => pedirConfirmacao('Concluir/arquivar este processo? Ele sairá das listas ativas.', () => concluirProcesso(p))}>Concluir / Arquivar Processo</button>
             {p.reparacaoDano?.ativo ? (
               <span style={{ fontSize: '12px', color: 'var(--text-secondary)', alignSelf: 'center' }}>🌱 Já espelhado em Acompanhamento de Reparação do Dano</span>
             ) : (
               <button className="btn-secondary" onClick={() => perguntarPendenciaReparacao((imediata) => marcarReparacaoDano(p, true, imediata))}>🌱 Espelhar em Acompanhamento de Reparação do Dano</button>
             )}
+          </div>
+        );
+
+      case 'processos_prontos_consema':
+        return (
+          <div className="action-buttons">
+            <button className="btn-primary" onClick={() => pedirConfirmacao('Concluir/arquivar este processo? Ele sairá das listas ativas e da lista pública.', () => concluirProcesso(p))}>Concluir / Arquivar Processo</button>
           </div>
         );
 
@@ -2000,8 +2011,42 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
               </div>
             </div>
           )}
+          {publico && (
+            <div style={{ marginTop: '18px', textAlign: 'center' }}>
+              <button type="button" className="btn-new" onClick={() => setView('prontosConsema')}>
+                ⚖️ Clique aqui para ver a lista de processos prontos para julgamento
+              </button>
+            </div>
+          )}
           {!mostrarLegenda && !publico && (
             <button type="button" className="link-btn" style={{ marginTop: '14px' }} onClick={() => setMostrarLegenda(true)}>Mostrar legendas</button>
+          )}
+        </div>
+      )}
+
+      {view === 'prontosConsema' && publico && (
+        <div className="list-view">
+          <div className="list-header">
+            <h3>⚖️ Processos Prontos para Julgamento do CONSEMA</h3>
+            <div className="header-buttons">
+              <button className="btn-settings" onClick={() => setView('dashboard')}>← Voltar à Dashboard</button>
+            </div>
+          </div>
+          <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '14px' }}>
+            Consulta pública, somente leitura — {contarEstado('processos_prontos_consema').length} processo(s) aguardando julgamento.
+          </p>
+          {contarEstado('processos_prontos_consema').length === 0 ? (
+            <p className="empty-state">Nenhum processo pronto para julgamento no momento.</p>
+          ) : (
+            <div className="pa-publico-lista">
+              {[...contarEstado('processos_prontos_consema')]
+                .sort((a, b) => (a.parte || '').localeCompare(b.parte || '', 'pt-BR'))
+                .map((p) => (
+                  <div key={p.id} className="card-item" style={{ cursor: 'default' }}>
+                    <strong>{p.parte}</strong>
+                  </div>
+                ))}
+            </div>
           )}
         </div>
       )}
