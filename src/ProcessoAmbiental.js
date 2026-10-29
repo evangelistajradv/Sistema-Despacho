@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { db } from './firebase-config';
-import { collection, doc, updateDoc, deleteDoc, onSnapshot, runTransaction, writeBatch } from 'firebase/firestore';
+import { collection, doc, updateDoc, deleteDoc, onSnapshot, runTransaction, writeBatch, setDoc } from 'firebase/firestore';
 
 // ═══════════════════════════════════════════════════════════════════
 // PROCESSO ADMINISTRATIVO AMBIENTAL — módulo separado e autônomo do
@@ -163,6 +163,47 @@ function diasNoEstado(entradaISO) {
   return Math.floor((Date.now() - new Date(entradaISO).getTime()) / (1000 * 60 * 60 * 24));
 }
 
+// ─── Espelho público (publico/ambiental) ───────────────────────────
+// A consulta pública NÃO lê mais a coleção de processos (que tem CPF/CNPJ,
+// endereços, multas...). Ela lê um único documento agregado, mantido pelos
+// usuários logados: contagens por estado (+ urgentes), total em tramitação e
+// os nomes das partes dos processos prontos para julgamento do CONSEMA.
+function montarAgregadoPublico(processos) {
+  const estados = {};
+  const prontos = [];
+  let totalTramitando = 0;
+  processos.forEach((p) => {
+    if (p.estado !== 'arquivado') totalTramitando++;
+    if (p.concluido || p.incidente?.ativo) return;
+    const e = estados[p.estado] || (estados[p.estado] = { total: 0, urgentes: 0 });
+    e.total++;
+    if (p.urgente) e.urgentes++;
+    if (p.estado === 'processos_prontos_consema') prontos.push(p.parte || '');
+  });
+  prontos.sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const ordenado = {};
+  Object.keys(estados).sort().forEach((k) => { ordenado[k] = estados[k]; });
+  return { estados: ordenado, totalTramitando, prontos };
+}
+
+// Forma canônica para comparar o agregado local com o gravado (ignora ordem de chaves e carimbo de data).
+const chaveAgregado = (ag) => JSON.stringify([
+  Object.keys(ag.estados || {}).sort().map((k) => [k, ag.estados[k].total, ag.estados[k].urgentes]),
+  ag.totalTramitando, ag.prontos || [],
+]);
+
+// Recria processos "de mentirinha" (só estado/urgente/nome) a partir do agregado,
+// para a consulta pública reaproveitar toda a lógica de contagem da dashboard.
+function processosDoAgregado(ag) {
+  const lista = [];
+  Object.entries(ag.estados || {}).forEach(([estado, { total, urgentes }]) => {
+    for (let i = 0; i < total; i++) {
+      lista.push({ id: `${estado}-${i}`, estado, urgente: i < urgentes, parte: estado === 'processos_prontos_consema' ? (ag.prontos || [])[i] || '' : '' });
+    }
+  });
+  return lista;
+}
+
 const onlyDigits = (s) => (s || '').replace(/\D/g, '');
 
 const fmtMoeda = (v) => (Number(v) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -284,14 +325,43 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
     ],
   });
 
+  const [agregadoPublico, setAgregadoPublico] = useState(null);
+  const agregadoRemotoRef = useRef(null);
   useEffect(() => {
+    if (publico) {
+      // consulta pública: só o documento agregado, nunca os processos
+      const unsub = onSnapshot(
+        doc(db, 'publico', 'ambiental'),
+        (snap) => {
+          const ag = snap.exists() ? snap.data() : { estados: {}, totalTramitando: 0, prontos: [] };
+          setAgregadoPublico(ag);
+          setProcessos(processosDoAgregado(ag));
+        },
+        (err) => console.error('❌ Erro consulta pública:', err.message)
+      );
+      return () => unsub();
+    }
     const unsub = onSnapshot(
       collection(db, 'processosAmbientais'),
       (snap) => setProcessos(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
       (err) => console.error('❌ Erro processos ambientais:', err.message)
     );
-    return () => unsub();
-  }, []);
+    const unsubAg = onSnapshot(doc(db, 'publico', 'ambiental'), (snap) => { agregadoRemotoRef.current = snap.exists() ? chaveAgregado(snap.data()) : ''; }, () => {});
+    return () => { unsub(); unsubAg(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publico]);
+
+  // Mantém o espelho público em dia: só grava se o agregado mudou de fato.
+  useEffect(() => {
+    if (publico || processos.length === 0) return undefined;
+    const t = setTimeout(() => {
+      const ag = montarAgregadoPublico(processos);
+      if (chaveAgregado(ag) !== agregadoRemotoRef.current) {
+        setDoc(doc(db, 'publico', 'ambiental'), { ...ag, atualizadoEm: new Date().toISOString() }).catch((e) => console.warn('⚠️ Espelho público:', e.message));
+      }
+    }, 3000);
+    return () => clearTimeout(t);
+  }, [processos, publico]);
 
   // Atalho de teclado para abrir a autuação de um novo processo (Ctrl+Shift+N).
   // Como o Chrome reserva Ctrl+Shift+N para "nova janela anônima" e não deixa
@@ -1245,7 +1315,7 @@ export default function ProcessoAmbiental({ currentUser, ALL_USERS, nucleoAmbien
   const ativos = useMemo(() => processos.filter((p) => !p.concluido && !p.incidente?.ativo), [processos]);
   // Total de processos em tramitação — todos os estados, exceto arquivados.
   // Exibido no topo da tela, inclusive na consulta pública.
-  const totalTramitando = useMemo(() => processos.filter((p) => p.estado !== 'arquivado').length, [processos]);
+  const totalTramitando = useMemo(() => (publico && agregadoPublico ? agregadoPublico.totalTramitando : processos.filter((p) => p.estado !== 'arquivado').length), [processos, publico, agregadoPublico]);
   const incidentesAtivos = useMemo(() => processos.filter((p) => p.incidente?.ativo), [processos]);
   // Processos de TAC em diligência continuam espelhados no card de TACs.
   // eslint-disable-next-line react-hooks/exhaustive-deps
